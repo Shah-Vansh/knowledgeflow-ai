@@ -5,12 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.api import health
+from app.api import health, documents, query
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KnowledgeFlow AI", version="0.0.0-phase0")
+app = FastAPI(title="KnowledgeFlow AI", version="0.1.0-phase1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,6 +21,8 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(documents.router)
+app.include_router(query.router)
 
 
 @app.on_event("startup")
