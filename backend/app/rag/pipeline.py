@@ -1,10 +1,11 @@
 import logging
+from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.models import Document, Chunk
-from app.rag.parsers import extract_text
+from app.rag.parsers import extract_pages
 from app.rag.chunker import chunk_text
 from app.rag.embeddings import get_embedding_provider
 from app.rag.llm import get_llm_provider
@@ -26,26 +27,36 @@ def ingest_document(
     chunk_size: int = 500,
     overlap: int = 0,
 ) -> Document:
-    document = Document(filename=filename, status="processing")
+    source_type = filename.lower().rsplit(".", 1)[-1] if "." in filename else None
+
+    document = Document(filename=filename, status="processing", source_type=source_type)
     db.add(document)
     db.commit()
     db.refresh(document)
 
     try:
-        text = extract_text(file_path, filename)
-        document.raw_text = text
+        pages = extract_pages(file_path, filename)
 
-        pieces = chunk_text(text, strategy=strategy, chunk_size=chunk_size, overlap=overlap)
+        if source_type == "pdf":
+            document.page_count = len(pages)
 
-        if not pieces:
+        document.raw_text = "\n\n".join(text for _, text in pages)
+
+        all_pieces = []  # list of (piece_text, page_number)
+        for page_number, page_text in pages:
+            pieces = chunk_text(page_text, strategy=strategy, chunk_size=chunk_size, overlap=overlap)
+            for piece in pieces:
+                all_pieces.append((piece, page_number))
+
+        if not all_pieces:
             document.status = "failed"
             db.commit()
             return document
 
         embedder = get_embedding_provider()
-        vectors = embedder.embed_batch(pieces)
+        vectors = embedder.embed_batch([piece for piece, _ in all_pieces])
 
-        for index, (piece, vector) in enumerate(zip(pieces, vectors)):
+        for index, ((piece, page_number), vector) in enumerate(zip(all_pieces, vectors)):
             db.add(
                 Chunk(
                     document_id=document.id,
@@ -55,6 +66,7 @@ def ingest_document(
                     strategy=strategy,
                     chunk_size=chunk_size,
                     overlap=overlap,
+                    page_number=page_number,
                 )
             )
 
@@ -70,6 +82,13 @@ def ingest_document(
 
 
 def rechunk_document(db: Session, document_id: int, strategy: str, chunk_size: int, overlap: int) -> dict:
+    """
+    Re-chunks a document's stored raw_text. Note: raw_text is flat
+    (page boundaries are not preserved across the join), so rechunked
+    chunks always have page_number = None. This is a deliberate scope
+    limit for this phase — the Chunking Lab is about comparing chunking
+    quality, not re-deriving page attribution.
+    """
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         raise ValueError("Document not found")
@@ -104,33 +123,41 @@ def rechunk_document(db: Session, document_id: int, strategy: str, chunk_size: i
     return {"document_id": document_id, "chunk_count": len(pieces)}
 
 
-def answer_question(db: Session, question: str, k: int = None) -> dict:
+def answer_question(db: Session, question: str, k: int = None, document_ids: Optional[List[int]] = None) -> dict:
     k = k or settings.TOP_K
 
     embedder = get_embedding_provider()
     query_vector = embedder.embed(question)
 
-    results = retrieve_top_k(db, query_vector, k=k)
+    results = retrieve_top_k(db, query_vector, k=k, document_ids=document_ids)
 
     if not results:
-        return {"answer": NO_INFO_RESPONSE, "chunks_used": []}
+        return {"answer": NO_INFO_RESPONSE, "sources": []}
 
     best_distance = results[0][1]
     if best_distance > settings.SIMILARITY_THRESHOLD:
-        return {"answer": NO_INFO_RESPONSE, "chunks_used": []}
+        return {"answer": NO_INFO_RESPONSE, "sources": []}
 
     context_blocks = []
-    chunks_used = []
+    source_map = {}
+
     for chunk, distance in results:
         context_blocks.append(chunk.content)
-        chunks_used.append(
-            {
-                "chunk_id": chunk.id,
+        key = (chunk.document_id, chunk.page_number)
+
+        if key not in source_map:
+            source_map[key] = {
                 "document_id": chunk.document_id,
-                "chunk_index": chunk.chunk_index,
+                "filename": chunk.document.filename,
+                "page_number": chunk.page_number,
+                "chunk_ids": [],
                 "distance": float(distance),
             }
-        )
+
+        source_map[key]["chunk_ids"].append(chunk.id)
+        source_map[key]["distance"] = min(source_map[key]["distance"], float(distance))
+
+    sources = sorted(source_map.values(), key=lambda s: s["distance"])
 
     context = "\n\n---\n\n".join(context_blocks)
 
@@ -149,4 +176,4 @@ Answer:"""
     llm = get_llm_provider()
     answer = llm.generate(prompt)
 
-    return {"answer": answer, "chunks_used": chunks_used}
+    return {"answer": answer, "sources": sources}

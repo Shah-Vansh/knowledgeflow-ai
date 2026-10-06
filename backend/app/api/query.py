@@ -1,3 +1,5 @@
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -10,6 +12,7 @@ router = APIRouter(tags=["query"])
 
 class QueryRequest(BaseModel):
     question: str
+    document_ids: Optional[List[int]] = None
 
 
 def get_db():
@@ -22,4 +25,4 @@ def get_db():
 
 @router.post("/query")
 def query(request: QueryRequest, db: Session = Depends(get_db)):
-    return answer_question(db, request.question)
+    return answer_question(db, request.question, document_ids=request.document_ids)

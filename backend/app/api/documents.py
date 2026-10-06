@@ -1,8 +1,10 @@
 import os
 import shutil
 import tempfile
+from datetime import datetime, timezone
+from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -63,10 +65,21 @@ async def upload_document(
 
 
 @router.get("")
-def list_documents(db: Session = Depends(get_db)):
-    documents = db.query(Document).order_by(Document.id).all()
+def list_documents(status: Optional[str] = Query(None), db: Session = Depends(get_db)):
+    query = db.query(Document).filter(Document.deleted_at.is_(None))
+    if status:
+        query = query.filter(Document.status == status)
+    documents = query.order_by(Document.id).all()
+
     return [
-        {"id": d.id, "filename": d.filename, "status": d.status}
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "status": d.status,
+            "page_count": d.page_count,
+            "source_type": d.source_type,
+            "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
+        }
         for d in documents
     ]
 
@@ -87,6 +100,7 @@ def get_document_chunks(document_id: int, db: Session = Depends(get_db)):
             "strategy": c.strategy,
             "chunk_size": c.chunk_size,
             "overlap": c.overlap,
+            "page_number": c.page_number,
         }
         for c in chunks
     ]
@@ -105,3 +119,20 @@ def rechunk(document_id: int, request: RechunkRequest, db: Session = Depends(get
         raise HTTPException(status_code=404, detail=str(exc))
 
     return result
+
+
+@router.delete("/{document_id}")
+def delete_document(document_id: int, db: Session = Depends(get_db)):
+    document = (
+        db.query(Document)
+        .filter(Document.id == document_id, Document.deleted_at.is_(None))
+        .first()
+    )
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    db.query(Chunk).filter(Chunk.document_id == document_id).delete()
+    document.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {"document_id": document_id, "deleted": True}

@@ -17,6 +17,10 @@ class Document(Base):
     uploaded_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
     raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    deleted_at: Mapped[Optional[object]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     chunks: Mapped[List["Chunk"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
@@ -34,5 +38,6 @@ class Chunk(Base):
     strategy: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     chunk_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     overlap: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    page_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     document: Mapped["Document"] = relationship(back_populates="chunks")

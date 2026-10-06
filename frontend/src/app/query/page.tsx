@@ -1,22 +1,36 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { askQuestion, QueryResponse } from "@/lib/query";
+import { listDocuments, DocumentSummary } from "@/lib/documents";
 
 export default function QueryPage() {
   const [question, setQuestion] = useState("");
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const [documents, setDocuments] = useState<DocumentSummary[]>([]);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+
+  useEffect(() => {
+    listDocuments("processed").then(setDocuments).catch(() => {});
+  }, []);
+
+  const toggleDocument = (id: number) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
   const handleAsk = async () => {
     if (!question.trim()) return;
     setLoading(true);
     setResult(null);
     try {
-      const data = await askQuestion(question);
+      const data = await askQuestion(question, selectedIds);
       setResult(data);
     } catch (err) {
-      setResult({ answer: err instanceof Error ? err.message : "Query failed", chunks_used: [] });
+      setResult({ answer: err instanceof Error ? err.message : "Query failed", sources: [] });
     } finally {
       setLoading(false);
     }
@@ -33,6 +47,27 @@ export default function QueryPage() {
           className="w-full border border-gray-300 rounded-lg p-3 text-sm"
           rows={3}
         />
+
+        {documents.length > 0 && (
+          <details className="text-sm border border-gray-300 rounded-lg p-3 bg-white">
+            <summary className="cursor-pointer font-medium">
+              Scope to specific documents (optional — {selectedIds.length} selected)
+            </summary>
+            <div className="mt-3 space-y-1 max-h-40 overflow-y-auto">
+              {documents.map((d) => (
+                <label key={d.id} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(d.id)}
+                    onChange={() => toggleDocument(d.id)}
+                  />
+                  <span>#{d.id} — {d.filename}</span>
+                </label>
+              ))}
+            </div>
+          </details>
+        )}
+
         <button
           onClick={handleAsk}
           disabled={!question.trim() || loading}
@@ -44,13 +79,15 @@ export default function QueryPage() {
         {result && (
           <div className="rounded-lg border border-gray-300 p-4 bg-white space-y-3">
             <p className="font-semibold">{result.answer}</p>
-            {result.chunks_used.length > 0 && (
+            {result.sources.length > 0 && (
               <div className="text-xs text-gray-500">
-                <p className="font-medium mb-1">Chunks used:</p>
+                <p className="font-medium mb-1">Sources:</p>
                 <ul className="list-disc list-inside space-y-1">
-                  {result.chunks_used.map((c) => (
-                    <li key={c.chunk_id}>
-                      doc #{c.document_id}, chunk #{c.chunk_index} (distance: {c.distance.toFixed(3)})
+                  {result.sources.map((s) => (
+                    <li key={`${s.document_id}-${s.page_number ?? "na"}`}>
+                      {s.filename}
+                      {s.page_number !== null ? ` — page ${s.page_number}` : ""}
+                      {" "}(distance: {s.distance.toFixed(3)})
                     </li>
                   ))}
                 </ul>
@@ -59,9 +96,10 @@ export default function QueryPage() {
           </div>
         )}
 
-        <a href="/upload" className="block text-center text-blue-600 underline text-sm">
-          ← Go to Upload page
-        </a>
+        <div className="flex justify-between text-sm">
+          <a href="/upload" className="text-blue-600 underline">← Go to Upload page</a>
+          <a href="/documents" className="text-blue-600 underline">Manage Documents →</a>
+        </div>
       </div>
     </main>
   );

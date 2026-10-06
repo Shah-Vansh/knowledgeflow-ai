@@ -10,6 +10,9 @@ export interface DocumentSummary {
   id: number;
   filename: string;
   status: string;
+  page_count: number | null;
+  source_type: string | null;
+  uploaded_at: string | null;
 }
 
 export interface ChunkInfo {
@@ -19,6 +22,7 @@ export interface ChunkInfo {
   strategy: string | null;
   chunk_size: number | null;
   overlap: number | null;
+  page_number: number | null;
 }
 
 export interface RechunkResponse {
@@ -54,12 +58,25 @@ export async function uploadDocument(file: File, config?: ChunkConfig): Promise<
   return response.json();
 }
 
-export async function listDocuments(): Promise<DocumentSummary[]> {
-  const response = await fetch(`${API_BASE_URL}/documents`, { cache: "no-store" });
+export async function listDocuments(status?: string): Promise<DocumentSummary[]> {
+  const url = status
+    ? `${API_BASE_URL}/documents?status=${encodeURIComponent(status)}`
+    : `${API_BASE_URL}/documents`;
+  const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Failed to list documents (status ${response.status})`);
   }
   return response.json();
+}
+
+export async function deleteDocument(documentId: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/documents/${documentId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(errorBody.detail || `Delete failed with status ${response.status}`);
+  }
 }
 
 export async function getDocumentChunks(documentId: number): Promise<ChunkInfo[]> {
