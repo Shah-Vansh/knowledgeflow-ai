@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db.session import SessionLocal
-from app.db.models import Document, Chunk
+from app.db.models import Chunk
 from app.rag.pipeline import ingest_document
 
 client = TestClient(app)
@@ -32,11 +32,15 @@ def seeded_document(db_session, tmp_path):
     db_session.commit()
 
 
-def test_retrieve_debug_orders_by_ascending_distance(seeded_document):
-    response = client.post("/query/retrieve", json={"question": "What is the refund policy?", "k": 5})
+def test_retrieve_debug_dense_orders_by_ascending_distance(seeded_document):
+    response = client.post(
+        "/query/retrieve",
+        json={"question": "What is the refund policy?", "k": 5, "mode": "dense"},
+    )
     assert response.status_code == 200
     body = response.json()
-    distances = [r["distance"] for r in body["results"]]
+    distances = [r["dense_distance"] for r in body["results"]]
+    assert len(distances) > 0
     assert distances == sorted(distances)
 
 
@@ -45,12 +49,15 @@ def test_retrieve_debug_respects_k_limit(seeded_document):
     body = response.json()
     assert len(body["results"]) <= 1
     assert body["k_used"] == 1
+    assert body["mode"] == "hybrid"  # default mode
 
 
-def test_retrieve_debug_strict_threshold_flags_nothing(seeded_document):
+def test_retrieve_debug_dense_strict_threshold_flags_nothing(seeded_document):
+    # above_threshold is only meaningful in dense mode; hybrid/sparse always
+    # report True because their results are already filtered/fused.
     response = client.post(
         "/query/retrieve",
-        json={"question": "refund policy", "k": 5, "similarity_threshold": 0.001},
+        json={"question": "refund policy", "k": 5, "similarity_threshold": 0.001, "mode": "dense"},
     )
     body = response.json()
     assert len(body["results"]) > 0  # results are never hidden
@@ -65,3 +72,27 @@ def test_retrieve_debug_document_ids_filter(seeded_document):
     )
     body = response.json()
     assert body["results"] == []
+
+
+def test_retrieve_debug_sparse_mode_finds_exact_term(seeded_document):
+    response = client.post(
+        "/query/retrieve",
+        json={"question": "Berlin", "k": 5, "mode": "sparse", "document_ids": [seeded_document.id]},
+    )
+    body = response.json()
+    assert len(body["results"]) > 0
+    for r in body["results"]:
+        assert r["found_by"] == ["sparse"]
+        assert r["sparse_score"] is not None
+        assert r["dense_distance"] is None
+
+
+def test_retrieve_debug_hybrid_reports_found_by(seeded_document):
+    response = client.post(
+        "/query/retrieve",
+        json={"question": "Berlin", "k": 5, "mode": "hybrid", "document_ids": [seeded_document.id]},
+    )
+    body = response.json()
+    assert len(body["results"]) > 0
+    assert set(body["results"][0]["found_by"]) == {"dense", "sparse"}
+    assert body["results"][0]["rrf_score"] is not None

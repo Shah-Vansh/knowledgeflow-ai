@@ -5,7 +5,7 @@ export interface Source {
   filename: string;
   page_number: number | null;
   chunk_ids: number[];
-  distance: number;
+  score: number;
 }
 
 export interface QueryResponse {
