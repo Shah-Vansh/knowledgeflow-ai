@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { retrieveDebug, RetrievalResult } from "@/lib/retrieval";
+import { retrieveDebug, RetrievalResult, RetrievalMode } from "@/lib/retrieval";
 import { askQuestion, QueryResponse } from "@/lib/query";
 import { listDocuments, DocumentSummary } from "@/lib/documents";
 
@@ -9,6 +9,7 @@ export default function RetrievalLabPage() {
   const [question, setQuestion] = useState("");
   const [k, setK] = useState(5);
   const [threshold, setThreshold] = useState(0.8);
+  const [mode, setMode] = useState<RetrievalMode>("hybrid");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -37,7 +38,7 @@ export default function RetrievalLabPage() {
     setAnswer(null);
 
     try {
-      const debugResult = await retrieveDebug(question, k, threshold, selectedIds);
+      const debugResult = await retrieveDebug(question, k, threshold, mode, selectedIds);
       setResults(debugResult.results);
 
       if (runFullAnswer) {
@@ -51,20 +52,22 @@ export default function RetrievalLabPage() {
     }
   };
 
-  // Recompute above/below threshold client-side as the slider moves,
-  // without re-querying — distances are already in hand.
+  // For dense mode only, re-flag inclusion live as the threshold slider
+  // moves, without re-querying — distances are already in hand.
   const displayResults = results?.map((r) => ({
     ...r,
-    above_threshold: r.distance <= threshold,
+    above_threshold:
+      mode === "dense" && r.dense_distance !== null
+        ? r.dense_distance <= threshold
+        : r.above_threshold,
   }));
 
   return (
     <main className="min-h-screen p-8 flex flex-col items-center">
       <h1 className="text-2xl font-bold mb-2">Retrieval Laboratory</h1>
       <p className="text-sm text-gray-500 mb-6 text-center max-w-lg">
-        See exactly what retrieval finds for a query — every candidate chunk,
-        its similarity distance, and whether it would pass your threshold.
-        No LLM call unless you ask for one.
+        Compare Dense, Sparse (keyword/BM25-style), and Hybrid (RRF-fused) retrieval
+        on the same query — see exactly which chunks each method finds, and why.
       </p>
 
       <div className="w-full max-w-3xl space-y-4">
@@ -75,6 +78,20 @@ export default function RetrievalLabPage() {
           className="w-full border border-gray-300 rounded-lg p-3 text-sm"
           rows={2}
         />
+
+        <div className="flex gap-2 border border-gray-300 rounded-lg p-1 bg-white w-fit">
+          {(["dense", "sparse", "hybrid"] as RetrievalMode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={`px-4 py-1.5 rounded text-sm capitalize ${
+                mode === m ? "bg-blue-600 text-white" : "text-gray-600"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <label className="block text-sm border border-gray-300 rounded-lg p-3 bg-white">
@@ -89,7 +106,7 @@ export default function RetrievalLabPage() {
             />
           </label>
           <label className="block text-sm border border-gray-300 rounded-lg p-3 bg-white">
-            Similarity threshold (cosine distance): <span className="font-semibold">{threshold.toFixed(2)}</span>
+            Similarity threshold (dense mode only): <span className="font-semibold">{threshold.toFixed(2)}</span>
             <input
               type="range"
               min={0}
@@ -137,14 +154,14 @@ export default function RetrievalLabPage() {
           disabled={!question.trim() || loading}
           className="w-full bg-blue-600 text-white rounded-lg py-2 disabled:opacity-50"
         >
-          {loading ? "Retrieving..." : "Run Retrieval"}
+          {loading ? "Retrieving..." : `Run ${mode[0].toUpperCase()}${mode.slice(1)} Retrieval`}
         </button>
 
         {error && <div className="text-red-600 text-sm">{error}</div>}
 
         {answer && (
           <div className="border border-blue-300 rounded-lg p-3 bg-blue-50 text-sm">
-            <p className="font-semibold mb-1">Full answer (from /query):</p>
+            <p className="font-semibold mb-1">Full answer (from /query, always hybrid):</p>
             <p>{answer.answer}</p>
           </div>
         )}
@@ -165,10 +182,13 @@ export default function RetrievalLabPage() {
                   <span>
                     #{i + 1} — {r.filename}
                     {r.page_number !== null ? ` (page ${r.page_number})` : ""}
+                    {r.found_by.length > 0 ? ` · found by: ${r.found_by.join(" + ")}` : ""}
                   </span>
-                  <span>
-                    distance: <strong>{r.distance.toFixed(3)}</strong>{" "}
-                    {r.above_threshold ? "✓ included" : "✗ excluded"}
+                  <span className="text-right">
+                    {r.dense_distance !== null && <>dist: <strong>{r.dense_distance.toFixed(3)}</strong> </>}
+                    {r.sparse_score !== null && <>bm25: <strong>{r.sparse_score.toFixed(3)}</strong> </>}
+                    {r.rrf_score !== null && <>rrf: <strong>{r.rrf_score.toFixed(4)}</strong> </>}
+                    {mode === "dense" ? (r.above_threshold ? "✓ included" : "✗ excluded") : ""}
                   </span>
                 </div>
                 <p>{r.content}</p>

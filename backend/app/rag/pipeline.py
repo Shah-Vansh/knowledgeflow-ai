@@ -9,7 +9,7 @@ from app.rag.parsers import extract_pages
 from app.rag.chunker import chunk_text
 from app.rag.embeddings import get_embedding_provider
 from app.rag.llm import get_llm_provider
-from app.rag.retriever import retrieve_top_k
+from app.rag.retriever import retrieve_hybrid
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,8 @@ def ingest_document(
         vectors = embedder.embed_batch([piece for piece, _ in all_pieces])
 
         for index, ((piece, page_number), vector) in enumerate(zip(all_pieces, vectors)):
+            # search_vector is NOT set here — it's a PostgreSQL GENERATED
+            # ALWAYS AS column, computed automatically from `content`.
             db.add(
                 Chunk(
                     document_id=document.id,
@@ -82,13 +84,6 @@ def ingest_document(
 
 
 def rechunk_document(db: Session, document_id: int, strategy: str, chunk_size: int, overlap: int) -> dict:
-    """
-    Re-chunks a document's stored raw_text. Note: raw_text is flat
-    (page boundaries are not preserved across the join), so rechunked
-    chunks always have page_number = None. This is a deliberate scope
-    limit for this phase — the Chunking Lab is about comparing chunking
-    quality, not re-deriving page attribution.
-    """
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         raise ValueError("Document not found")
@@ -129,19 +124,29 @@ def answer_question(db: Session, question: str, k: int = None, document_ids: Opt
     embedder = get_embedding_provider()
     query_vector = embedder.embed(question)
 
-    results = retrieve_top_k(db, query_vector, k=k, document_ids=document_ids)
+    hybrid = retrieve_hybrid(db, question, query_vector, k=k, document_ids=document_ids)
+    fused_results = hybrid["fused"]
 
-    if not results:
+    if not fused_results:
         return {"answer": NO_INFO_RESPONSE, "sources": []}
 
-    best_distance = results[0][1]
-    if best_distance > settings.SIMILARITY_THRESHOLD:
+    # Grounding gate: proceed only if EITHER dense found something within
+    # the similarity threshold OR sparse found an actual keyword match.
+    # This preserves Phase 1's no-hallucination guarantee while allowing
+    # hybrid's two different "this is relevant" signals to each count.
+    dense_ok = (
+        hybrid["best_dense_distance"] is not None
+        and hybrid["best_dense_distance"] <= settings.SIMILARITY_THRESHOLD
+    )
+    sparse_ok = hybrid["sparse_hit_count"] > 0
+
+    if not dense_ok and not sparse_ok:
         return {"answer": NO_INFO_RESPONSE, "sources": []}
 
     context_blocks = []
     source_map = {}
 
-    for chunk, distance in results:
+    for chunk, rrf_score in fused_results:
         context_blocks.append(chunk.content)
         key = (chunk.document_id, chunk.page_number)
 
@@ -151,13 +156,13 @@ def answer_question(db: Session, question: str, k: int = None, document_ids: Opt
                 "filename": chunk.document.filename,
                 "page_number": chunk.page_number,
                 "chunk_ids": [],
-                "distance": float(distance),
+                "score": rrf_score,
             }
 
         source_map[key]["chunk_ids"].append(chunk.id)
-        source_map[key]["distance"] = min(source_map[key]["distance"], float(distance))
+        source_map[key]["score"] = max(source_map[key]["score"], rrf_score)
 
-    sources = sorted(source_map.values(), key=lambda s: s["distance"])
+    sources = sorted(source_map.values(), key=lambda s: s["score"], reverse=True)
 
     context = "\n\n---\n\n".join(context_blocks)
 

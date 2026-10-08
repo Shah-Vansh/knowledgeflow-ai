@@ -1,25 +1,32 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+export type RetrievalMode = "dense" | "sparse" | "hybrid";
+
 export interface RetrievalResult {
   chunk_id: number;
   content: string;
-  distance: number;
-  above_threshold: boolean;
   document_id: number;
   filename: string;
   page_number: number | null;
+  dense_distance: number | null;
+  sparse_score: number | null;
+  rrf_score: number | null;
+  found_by: string[];
+  above_threshold: boolean;
 }
 
 export interface RetrieveDebugResponse {
   results: RetrievalResult[];
   threshold_used: number;
   k_used: number;
+  mode: RetrievalMode;
 }
 
 export async function retrieveDebug(
   question: string,
   k: number,
   similarityThreshold: number,
+  mode: RetrievalMode,
   documentIds?: number[]
 ): Promise<RetrieveDebugResponse> {
   const response = await fetch(`${API_BASE_URL}/query/retrieve`, {
@@ -29,6 +36,7 @@ export async function retrieveDebug(
       question,
       k,
       similarity_threshold: similarityThreshold,
+      mode,
       document_ids: documentIds && documentIds.length > 0 ? documentIds : undefined,
     }),
   });

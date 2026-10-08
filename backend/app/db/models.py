@@ -1,7 +1,8 @@
 from typing import List, Optional
 
-from sqlalchemy import String, ForeignKey, Integer, DateTime, Text, func
+from sqlalchemy import String, ForeignKey, Integer, DateTime, Text, Computed, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from pgvector.sqlalchemy import Vector
 
 from app.db.base import Base
@@ -39,5 +40,14 @@ class Chunk(Base):
     chunk_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     overlap: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     page_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Database-computed (GENERATED ALWAYS AS ... STORED) — never set this from
+    # Python code. PostgreSQL derives it automatically from `content` on every
+    # insert/update, which is why there's no corresponding pipeline.py change.
+    search_vector: Mapped[Optional[str]] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', content)", persisted=True),
+        nullable=True,
+    )
 
     document: Mapped["Document"] = relationship(back_populates="chunks")

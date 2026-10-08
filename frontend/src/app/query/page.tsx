@@ -87,7 +87,7 @@ export default function QueryPage() {
                     <li key={`${s.document_id}-${s.page_number ?? "na"}`}>
                       {s.filename}
                       {s.page_number !== null ? ` — page ${s.page_number}` : ""}
-                      {" "}(distance: {s.distance.toFixed(3)})
+                      {" "}(relevance score: {s.score.toFixed(3)})
                     </li>
                   ))}
                 </ul>
