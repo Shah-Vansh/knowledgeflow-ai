@@ -11,6 +11,9 @@ export interface RetrievalResult {
   dense_distance: number | null;
   sparse_score: number | null;
   rrf_score: number | null;
+  rerank_score: number | null;
+  pre_rerank_rank: number | null;
+  post_rerank_rank: number | null;
   found_by: string[];
   above_threshold: boolean;
 }
@@ -20,6 +23,7 @@ export interface RetrieveDebugResponse {
   threshold_used: number;
   k_used: number;
   mode: RetrievalMode;
+  reranked: boolean;
 }
 
 export async function retrieveDebug(
@@ -27,7 +31,8 @@ export async function retrieveDebug(
   k: number,
   similarityThreshold: number,
   mode: RetrievalMode,
-  documentIds?: number[]
+  documentIds?: number[],
+  rerank: boolean = false
 ): Promise<RetrieveDebugResponse> {
   const response = await fetch(`${API_BASE_URL}/query/retrieve`, {
     method: "POST",
@@ -37,6 +42,7 @@ export async function retrieveDebug(
       k,
       similarity_threshold: similarityThreshold,
       mode,
+      rerank,
       document_ids: documentIds && documentIds.length > 0 ? documentIds : undefined,
     }),
   });
