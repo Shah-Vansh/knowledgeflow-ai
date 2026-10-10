@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from app.rag.chunker import chunk_text
 from app.rag.embeddings import get_embedding_provider
 from app.rag.llm import get_llm_provider
 from app.rag.retriever import retrieve_hybrid
+from app.rag.reranker import Reranker, get_reranker, rerank_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +59,7 @@ def ingest_document(
         vectors = embedder.embed_batch([piece for piece, _ in all_pieces])
 
         for index, ((piece, page_number), vector) in enumerate(zip(all_pieces, vectors)):
-            # search_vector is NOT set here — it's a PostgreSQL GENERATED
-            # ALWAYS AS column, computed automatically from `content`.
+            # search_vector is NOT set here — it's a PostgreSQL generated column.
             db.add(
                 Chunk(
                     document_id=document.id,
@@ -118,22 +119,82 @@ def rechunk_document(db: Session, document_id: int, strategy: str, chunk_size: i
     return {"document_id": document_id, "chunk_count": len(pieces)}
 
 
-def answer_question(db: Session, question: str, k: int = None, document_ids: Optional[List[int]] = None) -> dict:
+def retrieve_context(
+    db: Session,
+    question: str,
+    query_vector: List[float],
+    k: int,
+    document_ids: Optional[List[int]] = None,
+    reranker: Optional[Reranker] = None,
+    use_rerank: Optional[bool] = None,
+) -> dict:
+    """
+    Stage 1 + optional stage 2 of retrieval, with no LLM call.
+
+    Returns:
+      hybrid:   the raw dict from retrieve_hybrid (dense/sparse results, grounding signals)
+      ranked:   final top-k as dicts: chunk, score, fused_score, pre_rank, post_rank
+      reranked: whether the cross-encoder was applied
+
+    With reranking off, this behaves exactly like Phase 5 (pre_rank == post_rank,
+    score == fused RRF score). With it on, a wider candidate pool is retrieved,
+    then the cross-encoder re-scores it and the best k are kept.
+    """
+    if use_rerank is None:
+        use_rerank = settings.RERANK_ENABLED
+
+    if not use_rerank:
+        hybrid = retrieve_hybrid(db, question, query_vector, k=k, document_ids=document_ids)
+        ranked = [
+            {
+                "chunk": chunk,
+                "score": float(score),
+                "fused_score": float(score),
+                "pre_rank": position,
+                "post_rank": position,
+            }
+            for position, (chunk, score) in enumerate(hybrid["fused"], start=1)
+        ]
+        return {"hybrid": hybrid, "ranked": ranked, "reranked": False}
+
+    pool = max(k, settings.RERANK_CANDIDATES)
+    hybrid = retrieve_hybrid(
+        db, question, query_vector, k=pool, document_ids=document_ids, candidate_pool=pool
+    )
+
+    active_reranker = reranker or get_reranker()
+
+    started = time.perf_counter()
+    ranked = rerank_candidates(active_reranker, question, hybrid["fused"], top_k=k)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    logger.info("Reranked %d candidates in %.0f ms", len(hybrid["fused"]), elapsed_ms)
+
+    return {"hybrid": hybrid, "ranked": ranked, "reranked": True}
+
+
+def answer_question(
+    db: Session,
+    question: str,
+    k: int = None,
+    document_ids: Optional[List[int]] = None,
+    reranker: Optional[Reranker] = None,
+) -> dict:
     k = k or settings.TOP_K
 
     embedder = get_embedding_provider()
     query_vector = embedder.embed(question)
 
-    hybrid = retrieve_hybrid(db, question, query_vector, k=k, document_ids=document_ids)
-    fused_results = hybrid["fused"]
+    retrieval = retrieve_context(
+        db, question, query_vector, k=k, document_ids=document_ids, reranker=reranker
+    )
+    hybrid = retrieval["hybrid"]
+    ranked = retrieval["ranked"]
 
-    if not fused_results:
+    if not ranked:
         return {"answer": NO_INFO_RESPONSE, "sources": []}
 
-    # Grounding gate: proceed only if EITHER dense found something within
-    # the similarity threshold OR sparse found an actual keyword match.
-    # This preserves Phase 1's no-hallucination guarantee while allowing
-    # hybrid's two different "this is relevant" signals to each count.
+    # Grounding gate (unchanged from Phase 5): proceed only if EITHER dense found
+    # something within the similarity threshold OR sparse found a keyword match.
     dense_ok = (
         hybrid["best_dense_distance"] is not None
         and hybrid["best_dense_distance"] <= settings.SIMILARITY_THRESHOLD
@@ -146,7 +207,9 @@ def answer_question(db: Session, question: str, k: int = None, document_ids: Opt
     context_blocks = []
     source_map = {}
 
-    for chunk, rrf_score in fused_results:
+    for item in ranked:
+        chunk = item["chunk"]
+        score = item["score"]
         context_blocks.append(chunk.content)
         key = (chunk.document_id, chunk.page_number)
 
@@ -156,11 +219,11 @@ def answer_question(db: Session, question: str, k: int = None, document_ids: Opt
                 "filename": chunk.document.filename,
                 "page_number": chunk.page_number,
                 "chunk_ids": [],
-                "score": rrf_score,
+                "score": score,
             }
 
         source_map[key]["chunk_ids"].append(chunk.id)
-        source_map[key]["score"] = max(source_map[key]["score"], rrf_score)
+        source_map[key]["score"] = max(source_map[key]["score"], score)
 
     sources = sorted(source_map.values(), key=lambda s: s["score"], reverse=True)
 
