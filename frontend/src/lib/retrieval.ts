@@ -2,6 +2,27 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export type RetrievalMode = "dense" | "sparse" | "hybrid";
 
+export interface SearchJobInfo {
+  label: string;
+  kind: string;
+  dense: boolean;
+  sparse: boolean;
+  text: string;
+}
+
+export interface TransformationInfo {
+  original: string;
+  requested: string[];
+  rewrite: string | null;
+  keywords: string[];
+  variants: string[];
+  hyde: string | null;
+  fallback_used: boolean;
+  error: string | null;
+  elapsed_ms: number;
+  jobs: SearchJobInfo[];
+}
+
 export interface RetrievalResult {
   chunk_id: number;
   content: string;
@@ -15,6 +36,7 @@ export interface RetrievalResult {
   pre_rerank_rank: number | null;
   post_rerank_rank: number | null;
   found_by: string[];
+  found_by_queries: string[];
   above_threshold: boolean;
 }
 
@@ -24,6 +46,7 @@ export interface RetrieveDebugResponse {
   k_used: number;
   mode: RetrievalMode;
   reranked: boolean;
+  transformation: TransformationInfo | null;
 }
 
 export async function retrieveDebug(
@@ -32,7 +55,8 @@ export async function retrieveDebug(
   similarityThreshold: number,
   mode: RetrievalMode,
   documentIds?: number[],
-  rerank: boolean = false
+  rerank: boolean = false,
+  transforms: string[] = []
 ): Promise<RetrieveDebugResponse> {
   const response = await fetch(`${API_BASE_URL}/query/retrieve`, {
     method: "POST",
@@ -43,12 +67,16 @@ export async function retrieveDebug(
       similarity_threshold: similarityThreshold,
       mode,
       rerank,
+      transforms,
       document_ids: documentIds && documentIds.length > 0 ? documentIds : undefined,
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`Retrieval debug failed with status ${response.status}`);
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(
+      errorBody.detail || `Retrieval debug failed with status ${response.status}`
+    );
   }
 
   return response.json();

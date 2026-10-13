@@ -11,20 +11,29 @@ export interface Source {
 export interface QueryResponse {
   answer: string;
   sources: Source[];
+  transforms_used?: string[];
+  transformation_fallback?: boolean;
 }
 
-export async function askQuestion(question: string, documentIds?: number[]): Promise<QueryResponse> {
+// transforms: omit to use the server default (QUERY_TRANSFORMS); pass [] for none.
+export async function askQuestion(
+  question: string,
+  documentIds?: number[],
+  transforms?: string[]
+): Promise<QueryResponse> {
   const response = await fetch(`${API_BASE_URL}/query`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       question,
       document_ids: documentIds && documentIds.length > 0 ? documentIds : undefined,
+      transforms,
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`Query failed with status ${response.status}`);
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(errorBody.detail || `Query failed with status ${response.status}`);
   }
 
   return response.json();

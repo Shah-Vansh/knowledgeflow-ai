@@ -7,12 +7,12 @@ from app.core.config import settings
 
 class LLMProvider(ABC):
     """
-    Abstract interface for generating answers.
+    Abstract interface for generating text.
     Swapping providers should never require touching code outside this file.
     """
 
     @abstractmethod
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, temperature: float = 0.2) -> str:
         ...
 
 
@@ -21,13 +21,14 @@ class GroqLLMProvider(LLMProvider):
         self._client = Groq(api_key=settings.GROQ_API_KEY)
         self._model = settings.GROQ_LLM_MODEL
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, temperature: float = 0.2) -> str:
         response = self._client.chat.completions.create(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
+            temperature=temperature,
         )
-        return response.choices[0].message.content.strip()
+        content = response.choices[0].message.content
+        return (content or "").strip()
 
 
 def get_llm_provider() -> LLMProvider:
