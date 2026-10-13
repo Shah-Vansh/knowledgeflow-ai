@@ -1,14 +1,16 @@
+from dataclasses import asdict
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.rag.pipeline import answer_question, retrieve_context
 from app.rag.embeddings import get_embedding_provider
-from app.rag.retriever import retrieve_top_k, retrieve_bm25
+from app.rag.pipeline import answer_question, describe_provenance, retrieve_context
+from app.rag.query_transform import normalize_transforms
+from app.rag.retriever import retrieve_bm25, retrieve_top_k
 
 router = APIRouter(tags=["query"])
 
@@ -16,6 +18,7 @@ router = APIRouter(tags=["query"])
 class QueryRequest(BaseModel):
     question: str
     document_ids: Optional[List[int]] = None
+    transforms: Optional[List[str]] = None  # None = server default (QUERY_TRANSFORMS)
 
 
 class RetrieveDebugRequest(BaseModel):
@@ -24,7 +27,8 @@ class RetrieveDebugRequest(BaseModel):
     similarity_threshold: Optional[float] = None
     document_ids: Optional[List[int]] = None
     mode: str = "hybrid"  # "dense" | "sparse" | "hybrid"
-    rerank: bool = False  # only applies to hybrid mode
+    rerank: bool = False  # hybrid mode only
+    transforms: Optional[List[str]] = None  # hybrid mode only; None = no transformation
 
 
 def get_db():
@@ -35,17 +39,32 @@ def get_db():
         db.close()
 
 
+def _validated_transforms(names: Optional[List[str]]) -> Optional[List[str]]:
+    if names is None:
+        return None
+    try:
+        return normalize_transforms(names)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/query")
 def query(request: QueryRequest, db: Session = Depends(get_db)):
-    return answer_question(db, request.question, document_ids=request.document_ids)
+    transforms = _validated_transforms(request.transforms)
+    return answer_question(
+        db, request.question, document_ids=request.document_ids, transforms=transforms
+    )
 
 
 @router.post("/query/retrieve")
 def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db)):
     """
-    Debug endpoint: dense, sparse, or hybrid (optionally reranked) retrieval,
-    with no LLM call. Never hides results — only annotates them.
+    Debug endpoint: dense, sparse, or hybrid retrieval (optionally query-transformed
+    and reranked), with no final-answer LLM call. Never hides results — only
+    annotates them.
     """
+    transforms = _validated_transforms(request.transforms) or []
+
     k = max(1, min(request.k, 20))
     threshold = (
         request.similarity_threshold
@@ -54,6 +73,7 @@ def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db))
     )
 
     reranked = False
+    transformation_payload = None
 
     if request.mode == "dense":
         embedder = get_embedding_provider()
@@ -74,6 +94,7 @@ def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db))
                 "pre_rerank_rank": None,
                 "post_rerank_rank": None,
                 "found_by": ["dense"],
+                "found_by_queries": [],
                 "above_threshold": float(distance) <= threshold,
             }
             for chunk, distance in results
@@ -96,6 +117,7 @@ def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db))
                 "pre_rerank_rank": None,
                 "post_rerank_rank": None,
                 "found_by": ["sparse"],
+                "found_by_queries": [],
                 "above_threshold": True,  # already filtered to real matches by @@ operator
             }
             for chunk, score in results
@@ -112,21 +134,48 @@ def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db))
             k=k,
             document_ids=request.document_ids,
             use_rerank=request.rerank,
+            transforms=transforms,
+            embedder=embedder,
         )
         hybrid = retrieval["hybrid"]
         reranked = retrieval["reranked"]
+        provenance = retrieval["provenance"]
 
+        if retrieval["transformation"] is not None:
+            transformation_payload = {
+                **asdict(retrieval["transformation"]),
+                "jobs": [
+                    {
+                        "label": job.label,
+                        "kind": job.kind,
+                        "dense": job.dense,
+                        "sparse": job.sparse,
+                        "text": job.text,
+                    }
+                    for job in retrieval["jobs"]
+                ],
+            }
+
+        # dense_distance / sparse_score describe the ORIGINAL query only
         dense_ids = {chunk.id: distance for chunk, distance in hybrid["dense_results"]}
         sparse_ids = {chunk.id: score for chunk, score in hybrid["sparse_results"]}
 
         formatted = []
         for item in retrieval["ranked"]:
             chunk = item["chunk"]
-            found_by = []
-            if chunk.id in dense_ids:
-                found_by.append("dense")
-            if chunk.id in sparse_ids:
-                found_by.append("sparse")
+
+            if provenance is not None:
+                entry = provenance.get(chunk.id, {})
+                methods = {m for ms in entry.values() for m in ms}
+                found_by = [m for m in ("dense", "sparse") if m in methods]
+                found_by_queries = describe_provenance(entry)
+            else:
+                found_by = []
+                if chunk.id in dense_ids:
+                    found_by.append("dense")
+                if chunk.id in sparse_ids:
+                    found_by.append("sparse")
+                found_by_queries = []
 
             formatted.append({
                 "chunk_id": chunk.id,
@@ -141,6 +190,7 @@ def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db))
                 "pre_rerank_rank": item["pre_rank"] if reranked else None,
                 "post_rerank_rank": item["post_rank"] if reranked else None,
                 "found_by": found_by,
+                "found_by_queries": found_by_queries,
                 "above_threshold": True,  # already the final top-k
             })
 
@@ -150,4 +200,5 @@ def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db))
         "k_used": k,
         "mode": request.mode,
         "reranked": reranked,
+        "transformation": transformation_payload,
     }

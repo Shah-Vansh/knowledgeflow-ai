@@ -23,11 +23,21 @@ class Settings(BaseSettings):
     RERANK_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     RERANK_CANDIDATES: int = 20
 
+    # Query transformation (costs ONE extra LLM call per question when enabled).
+    # Comma-separated default for /query. Empty = off (Phase 6 behavior).
+    # Allowed: rewrite, expand, multi_query, hyde
+    QUERY_TRANSFORMS: str = ""
+    MULTI_QUERY_COUNT: int = 3
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def default_transforms(self) -> list[str]:
+        return [t.strip().lower() for t in self.QUERY_TRANSFORMS.split(",") if t.strip()]
 
 
 settings = Settings()
