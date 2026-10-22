@@ -4,6 +4,7 @@ export interface UploadResponse {
   document_id: number;
   filename: string;
   status: string;
+  workspace_id: number;
 }
 
 export interface DocumentSummary {
@@ -12,6 +13,7 @@ export interface DocumentSummary {
   status: string;
   page_count: number | null;
   source_type: string | null;
+  workspace_id: number;
   uploaded_at: string | null;
 }
 
@@ -36,13 +38,20 @@ export interface ChunkConfig {
   overlap: number;
 }
 
-export async function uploadDocument(file: File, config?: ChunkConfig): Promise<UploadResponse> {
+export async function uploadDocument(
+  file: File,
+  config?: ChunkConfig,
+  workspaceId?: number
+): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
   if (config) {
     formData.append("strategy", config.strategy);
     formData.append("chunk_size", String(config.chunk_size));
     formData.append("overlap", String(config.overlap));
+  }
+  if (workspaceId !== undefined) {
+    formData.append("workspace_id", String(workspaceId));
   }
 
   const response = await fetch(`${API_BASE_URL}/documents/upload`, {
@@ -58,11 +67,18 @@ export async function uploadDocument(file: File, config?: ChunkConfig): Promise<
   return response.json();
 }
 
-export async function listDocuments(status?: string): Promise<DocumentSummary[]> {
-  const url = status
-    ? `${API_BASE_URL}/documents?status=${encodeURIComponent(status)}`
-    : `${API_BASE_URL}/documents`;
-  const response = await fetch(url, { cache: "no-store" });
+export async function listDocuments(
+  status?: string,
+  workspaceId?: number
+): Promise<DocumentSummary[]> {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (workspaceId !== undefined) params.set("workspace_id", String(workspaceId));
+  const query = params.toString();
+
+  const response = await fetch(`${API_BASE_URL}/documents${query ? `?${query}` : ""}`, {
+    cache: "no-store",
+  });
   if (!response.ok) {
     throw new Error(`Failed to list documents (status ${response.status})`);
   }

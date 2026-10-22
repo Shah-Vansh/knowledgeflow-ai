@@ -9,31 +9,39 @@ from app.db.models import Chunk, Document
 RRF_K = 60  # standard constant from the original Reciprocal Rank Fusion paper
 
 
+def _scoped(query, document_ids: Optional[List[int]], workspace_id: Optional[int]):
+    """
+    Applies the visibility rules shared by every retriever. The query must already
+    join Document. workspace_id is enforced IN SQL: when given, a chunk from any
+    other workspace can never be returned, and an empty workspace yields nothing
+    (it does not fall back to searching everything).
+    """
+    query = query.filter(Document.deleted_at.is_(None))
+    if workspace_id is not None:
+        query = query.filter(Document.workspace_id == workspace_id)
+    if document_ids:
+        query = query.filter(Chunk.document_id.in_(document_ids))
+    return query
+
+
 def retrieve_top_k(
     db: Session,
     query_embedding: List[float],
     k: int = 5,
     document_ids: Optional[List[int]] = None,
+    workspace_id: Optional[int] = None,
 ) -> List[Tuple[Chunk, float]]:
     """
     Dense retrieval. Cosine-distance similarity search via pgvector.
-    Lower distance = more similar. Always excludes soft-deleted documents.
+    Lower distance = more similar. Excludes soft-deleted documents.
     """
-    query = (
-        db.query(Chunk, Chunk.embedding.cosine_distance(query_embedding).label("distance"))
-        .join(Document, Chunk.document_id == Document.id)
-        .filter(Document.deleted_at.is_(None))
-    )
+    query = db.query(
+        Chunk, Chunk.embedding.cosine_distance(query_embedding).label("distance")
+    ).join(Document, Chunk.document_id == Document.id)
 
-    if document_ids:
-        query = query.filter(Chunk.document_id.in_(document_ids))
+    query = _scoped(query, document_ids, workspace_id)
 
-    results = (
-        query.order_by(Chunk.embedding.cosine_distance(query_embedding))
-        .limit(k)
-        .all()
-    )
-    return results
+    return query.order_by(Chunk.embedding.cosine_distance(query_embedding)).limit(k).all()
 
 
 def _run_fts(
@@ -41,18 +49,17 @@ def _run_fts(
     tsquery,
     k: int,
     document_ids: Optional[List[int]],
+    workspace_id: Optional[int],
 ) -> List[Tuple[Chunk, float]]:
     rank = func.ts_rank(Chunk.search_vector, tsquery)
 
     query = (
         db.query(Chunk, rank.label("score"))
         .join(Document, Chunk.document_id == Document.id)
-        .filter(Document.deleted_at.is_(None))
         .filter(Chunk.search_vector.op("@@")(tsquery))
     )
 
-    if document_ids:
-        query = query.filter(Chunk.document_id.in_(document_ids))
+    query = _scoped(query, document_ids, workspace_id)
 
     return query.order_by(rank.desc()).limit(k).all()
 
@@ -62,6 +69,7 @@ def retrieve_bm25(
     query_text: str,
     k: int = 20,
     document_ids: Optional[List[int]] = None,
+    workspace_id: Optional[int] = None,
 ) -> List[Tuple[Chunk, float]]:
     """
     Sparse (keyword) retrieval using PostgreSQL full-text search (ts_rank —
@@ -69,7 +77,7 @@ def retrieve_bm25(
     can legitimately return nothing.
     """
     tsquery = func.plainto_tsquery("english", query_text)
-    return _run_fts(db, tsquery, k, document_ids)
+    return _run_fts(db, tsquery, k, document_ids, workspace_id)
 
 
 def retrieve_bm25_any_term(
@@ -77,6 +85,7 @@ def retrieve_bm25_any_term(
     terms: List[str],
     k: int = 20,
     document_ids: Optional[List[int]] = None,
+    workspace_id: Optional[int] = None,
 ) -> List[Tuple[Chunk, float]]:
     """
     Sparse retrieval with OR semantics across `terms`. A multi-word term is
@@ -96,7 +105,7 @@ def retrieve_bm25_any_term(
         return []
 
     tsquery = func.to_tsquery("english", " | ".join(groups))
-    return _run_fts(db, tsquery, k, document_ids)
+    return _run_fts(db, tsquery, k, document_ids, workspace_id)
 
 
 def reciprocal_rank_fusion_many(
@@ -138,6 +147,7 @@ def retrieve_hybrid(
     k: int = 5,
     document_ids: Optional[List[int]] = None,
     candidate_pool: int = 20,
+    workspace_id: Optional[int] = None,
 ) -> dict:
     """
     Runs dense and sparse retrieval independently, fuses them with RRF.
@@ -148,8 +158,12 @@ def retrieve_hybrid(
       - best_dense_distance: best cosine distance in the dense pool (None if empty)
       - sparse_hit_count: how many chunks sparse search matched at all
     """
-    dense_results = retrieve_top_k(db, query_embedding, k=candidate_pool, document_ids=document_ids)
-    sparse_results = retrieve_bm25(db, query_text, k=candidate_pool, document_ids=document_ids)
+    dense_results = retrieve_top_k(
+        db, query_embedding, k=candidate_pool, document_ids=document_ids, workspace_id=workspace_id
+    )
+    sparse_results = retrieve_bm25(
+        db, query_text, k=candidate_pool, document_ids=document_ids, workspace_id=workspace_id
+    )
 
     fused = reciprocal_rank_fusion(dense_results, sparse_results, rrf_k=RRF_K, top_k=k)
 

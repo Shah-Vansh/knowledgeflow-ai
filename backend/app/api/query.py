@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_db, require_workspace
 from app.core.config import settings
-from app.db.session import SessionLocal
 from app.rag.embeddings import get_embedding_provider
 from app.rag.pipeline import answer_question, describe_provenance, retrieve_context
 from app.rag.query_transform import normalize_transforms
@@ -19,6 +19,7 @@ class QueryRequest(BaseModel):
     question: str
     document_ids: Optional[List[int]] = None
     transforms: Optional[List[str]] = None  # None = server default (QUERY_TRANSFORMS)
+    workspace_id: Optional[int] = None      # None = search every workspace
 
 
 class RetrieveDebugRequest(BaseModel):
@@ -29,14 +30,7 @@ class RetrieveDebugRequest(BaseModel):
     mode: str = "hybrid"  # "dense" | "sparse" | "hybrid"
     rerank: bool = False  # hybrid mode only
     transforms: Optional[List[str]] = None  # hybrid mode only; None = no transformation
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    workspace_id: Optional[int] = None      # None = search every workspace
 
 
 def _validated_transforms(names: Optional[List[str]]) -> Optional[List[str]]:
@@ -51,8 +45,14 @@ def _validated_transforms(names: Optional[List[str]]) -> Optional[List[str]]:
 @router.post("/query")
 def query(request: QueryRequest, db: Session = Depends(get_db)):
     transforms = _validated_transforms(request.transforms)
+    if request.workspace_id is not None:
+        require_workspace(db, request.workspace_id)
     return answer_question(
-        db, request.question, document_ids=request.document_ids, transforms=transforms
+        db,
+        request.question,
+        document_ids=request.document_ids,
+        transforms=transforms,
+        workspace_id=request.workspace_id,
     )
 
 
@@ -64,6 +64,8 @@ def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db))
     annotates them.
     """
     transforms = _validated_transforms(request.transforms) or []
+    if request.workspace_id is not None:
+        require_workspace(db, request.workspace_id)
 
     k = max(1, min(request.k, 20))
     threshold = (
@@ -78,7 +80,10 @@ def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db))
     if request.mode == "dense":
         embedder = get_embedding_provider()
         query_vector = embedder.embed(request.question)
-        results = retrieve_top_k(db, query_vector, k=k, document_ids=request.document_ids)
+        results = retrieve_top_k(
+            db, query_vector, k=k, document_ids=request.document_ids,
+            workspace_id=request.workspace_id,
+        )
 
         formatted = [
             {
@@ -101,7 +106,10 @@ def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db))
         ]
 
     elif request.mode == "sparse":
-        results = retrieve_bm25(db, request.question, k=k, document_ids=request.document_ids)
+        results = retrieve_bm25(
+            db, request.question, k=k, document_ids=request.document_ids,
+            workspace_id=request.workspace_id,
+        )
 
         formatted = [
             {
@@ -136,6 +144,7 @@ def retrieve_debug(request: RetrieveDebugRequest, db: Session = Depends(get_db))
             use_rerank=request.rerank,
             transforms=transforms,
             embedder=embedder,
+            workspace_id=request.workspace_id,
         )
         hybrid = retrieval["hybrid"]
         reranked = retrieval["reranked"]
