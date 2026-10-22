@@ -40,10 +40,17 @@ def ingest_document(
     strategy: str = "fixed_size",
     chunk_size: int = 500,
     overlap: int = 0,
+    workspace_id: Optional[int] = None,
 ) -> Document:
+    """
+    workspace_id=None leaves the column to its database default (the General
+    workspace). Callers that accept a workspace from a user must verify it exists.
+    """
     source_type = filename.lower().rsplit(".", 1)[-1] if "." in filename else None
 
     document = Document(filename=filename, status="processing", source_type=source_type)
+    if workspace_id is not None:
+        document.workspace_id = workspace_id
     db.add(document)
     db.commit()
     db.refresh(document)
@@ -177,6 +184,7 @@ def _retrieve_with_transforms(
     embedder,
     use_rerank: bool,
     reranker: Optional[Reranker],
+    workspace_id: Optional[int] = None,
 ) -> dict:
     llm = llm or get_llm_provider()
     embedder = embedder or get_embedding_provider()
@@ -204,13 +212,19 @@ def _retrieve_with_transforms(
             runs.append({
                 "label": job.label,
                 "method": "dense",
-                "results": retrieve_top_k(db, vector, k=depth, document_ids=document_ids),
+                "results": retrieve_top_k(
+                    db, vector, k=depth, document_ids=document_ids, workspace_id=workspace_id
+                ),
             })
         if job.sparse:
             if job.kind == "expand":
-                results = retrieve_bm25_any_term(db, job.terms, k=depth, document_ids=document_ids)
+                results = retrieve_bm25_any_term(
+                    db, job.terms, k=depth, document_ids=document_ids, workspace_id=workspace_id
+                )
             else:
-                results = retrieve_bm25(db, job.text, k=depth, document_ids=document_ids)
+                results = retrieve_bm25(
+                    db, job.text, k=depth, document_ids=document_ids, workspace_id=workspace_id
+                )
             runs.append({"label": job.label, "method": "sparse", "results": results})
 
     fused_size = depth if use_rerank else k
@@ -260,12 +274,14 @@ def retrieve_context(
     transforms: Optional[List[str]] = None,
     llm: Optional[LLMProvider] = None,
     embedder=None,
+    workspace_id: Optional[int] = None,
 ) -> dict:
     """
     Retrieval with no final-answer LLM call.
 
     transforms=None or [] means NO query transformation (exactly Phase 6 behavior);
     the config default is applied one level up, in answer_question.
+    workspace_id (when given) restricts every search to that workspace, in SQL.
 
     Returns:
       hybrid:         signals dict (fused, dense/sparse lists of the ORIGINAL query,
@@ -284,16 +300,19 @@ def retrieve_context(
     if requested:
         return _retrieve_with_transforms(
             db, question, query_vector, k, document_ids, requested,
-            llm, embedder, use_rerank, reranker,
+            llm, embedder, use_rerank, reranker, workspace_id=workspace_id,
         )
 
     if not use_rerank:
-        hybrid = retrieve_hybrid(db, question, query_vector, k=k, document_ids=document_ids)
+        hybrid = retrieve_hybrid(
+            db, question, query_vector, k=k, document_ids=document_ids, workspace_id=workspace_id
+        )
         ranked = _plain_ranked(hybrid["fused"], k)
     else:
         pool = max(k, settings.RERANK_CANDIDATES)
         hybrid = retrieve_hybrid(
-            db, question, query_vector, k=pool, document_ids=document_ids, candidate_pool=pool
+            db, question, query_vector, k=pool, document_ids=document_ids,
+            candidate_pool=pool, workspace_id=workspace_id,
         )
         ranked = _apply_rerank(question, hybrid["fused"], k, reranker)
 
@@ -315,6 +334,7 @@ def answer_question(
     reranker: Optional[Reranker] = None,
     transforms: Optional[List[str]] = None,
     llm: Optional[LLMProvider] = None,
+    workspace_id: Optional[int] = None,
 ) -> dict:
     k = k or settings.TOP_K
 
@@ -331,6 +351,7 @@ def answer_question(
     retrieval = retrieve_context(
         db, question, query_vector, k=k, document_ids=document_ids,
         reranker=reranker, transforms=transforms, llm=llm, embedder=embedder,
+        workspace_id=workspace_id,
     )
     hybrid = retrieval["hybrid"]
     ranked = retrieval["ranked"]
