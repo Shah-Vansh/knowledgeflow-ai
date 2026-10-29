@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -20,13 +21,6 @@ from app.core.config import settings
 
 
 class Workspace(Base):
-    """
-    A knowledge space. Documents (and therefore chunks) belong to exactly one
-    workspace, and retrieval can be restricted to one workspace in SQL.
-    Workspace id 1 ("General") is created by the migration and can't be deleted;
-    it is also the database default for documents.workspace_id.
-    """
-
     __tablename__ = "workspaces"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -115,11 +109,72 @@ class Message(Base):
     )
     role: Mapped[str] = mapped_column(String, nullable=False)  # "user" | "assistant"
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    # assistant messages: the structured sources the answer was built from
     sources: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    # assistant messages: the standalone question actually searched (when the
-    # follow-up was rewritten); None when the message was searched as typed
     standalone_question: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+
+
+class Entity(Base):
+    """
+    A node of the knowledge graph, unique per workspace by normalized name.
+    Entities are only ever created from text that literally contains the name
+    (see app/rag/graph_extract.py), so every node has evidence in some chunk.
+    """
+
+    __tablename__ = "entities"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "normalized_name", name="uq_entities_workspace_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String, nullable=False, default="OTHER")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Relationship(Base):
+    """
+    A directed edge (source --relation--> target), always tied to the ONE chunk it
+    was extracted from. Deleting that chunk (document deletion, rechunking) deletes
+    the edge, so the graph can never point at evidence that no longer exists.
+    """
+
+    __tablename__ = "relationships"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("chunks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_id: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    relation: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChunkEntity(Base):
+    """Which entities a chunk mentions (used to pull evidence chunks for graph retrieval)."""
+
+    __tablename__ = "chunk_entities"
+
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("chunks.id", ondelete="CASCADE"), primary_key=True
+    )
+    entity_id: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
