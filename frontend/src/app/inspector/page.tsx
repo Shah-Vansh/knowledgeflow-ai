@@ -1,8 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { listWorkspaces, Workspace } from "@/lib/workspaces";
 import { ChunkInfo, DocumentSummary, getDocumentChunks, listDocuments } from "@/lib/documents";
+import { useWorkspace } from "@/lib/workspace-context";
+import {
+  Alert,
+  Badge,
+  BadgeTone,
+  ButtonLink,
+  Card,
+  EmptyState,
+  Field,
+  Loading,
+  PageHeader,
+  Segmented,
+  Stat,
+  StatusBadge,
+  inputClass,
+} from "@/components/ui";
+import { InspectIcon } from "@/components/icons";
 
 const TYPE_LABEL: Record<string, string> = {
   text: "Text",
@@ -11,11 +27,11 @@ const TYPE_LABEL: Record<string, string> = {
   image_text: "Image text",
 };
 
-const TYPE_STYLE: Record<string, string> = {
-  text: "bg-gray-100 text-gray-700",
-  table: "bg-indigo-100 text-indigo-800",
-  ocr: "bg-amber-100 text-amber-800",
-  image_text: "bg-pink-100 text-pink-800",
+const TYPE_TONE: Record<string, BadgeTone> = {
+  text: "neutral",
+  table: "brand",
+  ocr: "warning",
+  image_text: "success",
 };
 
 // "| a | b |\n| --- | --- |\n| 1 | 2 |"  ->  [["a","b"],["1","2"]]
@@ -39,12 +55,15 @@ function ChunkBody({ chunk }: { chunk: ChunkInfo }) {
     if (rows && rows.length > 0) {
       const [header, ...body] = rows;
       return (
-        <div className="overflow-x-auto">
-          <table className="text-xs border border-gray-300">
+        <div className="overflow-x-auto rounded-lg bg-slate-50 p-3">
+          <table className="min-w-full border border-slate-200 bg-white text-xs">
             <thead>
               <tr>
                 {header.map((cell, i) => (
-                  <th key={i} className="border border-gray-300 bg-gray-50 px-2 py-1 text-left">
+                  <th
+                    key={i}
+                    className="border border-slate-200 bg-slate-50 px-2 py-1 text-left font-medium text-slate-700"
+                  >
                     {cell}
                   </th>
                 ))}
@@ -54,7 +73,7 @@ function ChunkBody({ chunk }: { chunk: ChunkInfo }) {
               {body.map((row, r) => (
                 <tr key={r}>
                   {row.map((cell, c) => (
-                    <td key={c} className="border border-gray-300 px-2 py-1">
+                    <td key={c} className="border border-slate-200 px-2 py-1 text-slate-700">
                       {cell}
                     </td>
                   ))}
@@ -66,46 +85,66 @@ function ChunkBody({ chunk }: { chunk: ChunkInfo }) {
       );
     }
   }
-  return <p className="text-xs whitespace-pre-wrap max-h-40 overflow-y-auto">{chunk.content}</p>;
+  return (
+    <p className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm leading-6 text-slate-700">
+      {chunk.content}
+    </p>
+  );
 }
 
 export default function InspectorPage() {
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [workspaceId, setWorkspaceId] = useState<number | null>(null);
+  const { workspaceId, workspace } = useWorkspace();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [documentId, setDocumentId] = useState<number | null>(null);
   const [chunks, setChunks] = useState<ChunkInfo[]>([]);
   const [filter, setFilter] = useState<string>("all");
   const [error, setError] = useState("");
+  const [loadingDocs, setLoadingDocs] = useState(true);
+  const [loadingChunks, setLoadingChunks] = useState(false);
 
   useEffect(() => {
-    listWorkspaces()
-      .then((list) => {
-        setWorkspaces(list);
-        if (list.length > 0) setWorkspaceId(list[0].id);
-      })
-      .catch(() => setError("Could not load workspaces"));
-  }, []);
-
-  useEffect(() => {
-    if (workspaceId === null) return;
+    let cancelled = false;
+    setDocuments([]);
     setDocumentId(null);
     setChunks([]);
     setError("");
+    setLoadingDocs(true);
     listDocuments(undefined, workspaceId)
       .then((list) => {
+        if (cancelled) return;
         setDocuments(list);
         if (list.length > 0) setDocumentId(list[list.length - 1].id);
       })
-      .catch(() => setError("Could not load documents"));
+      .catch(() => {
+        if (!cancelled) setError("Could not load documents");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDocs(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [workspaceId]);
 
   useEffect(() => {
     if (documentId === null) return;
+    let cancelled = false;
     setFilter("all");
+    setChunks([]);
+    setLoadingChunks(true);
     getDocumentChunks(documentId)
-      .then(setChunks)
-      .catch(() => setError("Could not load chunks"));
+      .then((list) => {
+        if (!cancelled) setChunks(list);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Could not load chunks");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingChunks(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [documentId]);
 
   const document = documents.find((d) => d.id === documentId) ?? null;
@@ -121,146 +160,135 @@ export default function InspectorPage() {
 
   const visible = filter === "all" ? chunks : chunks.filter((c) => c.chunk_type === filter);
 
+  const filterOptions = [
+    { value: "all", label: `All (${chunks.length})` },
+    ...Object.keys(counts).map((type) => ({
+      value: type,
+      label: `${TYPE_LABEL[type] ?? type} (${counts[type]})`,
+    })),
+  ];
+
   return (
-    <main className="min-h-screen p-8 flex flex-col items-center">
-      <h1 className="text-2xl font-bold mb-2">Document Inspector</h1>
-      <p className="text-sm text-gray-500 mb-6 text-center max-w-xl">
-        See how a file was processed: digital text, tables, pages read with OCR, and text found
-        inside images. Image content with no readable text is not searchable.
-      </p>
+    <div className="space-y-6">
+      <PageHeader
+        title="Document inspector"
+        description="See how a file was processed: digital text, tables, pages read with OCR, and text found inside images. Image content with no readable text is not searchable."
+      />
 
-      <div className="w-full max-w-4xl space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <label className="block text-sm">
-            Workspace
-            <select
-              value={workspaceId ?? ""}
-              onChange={(e) => setWorkspaceId(Number(e.target.value))}
-              className="block w-full border border-gray-300 rounded p-2 mt-1 bg-white"
-            >
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block text-sm">
-            Document
-            <select
-              value={documentId ?? ""}
-              onChange={(e) => setDocumentId(Number(e.target.value))}
-              className="block w-full border border-gray-300 rounded p-2 mt-1 bg-white"
-            >
-              {documents.length === 0 && <option value="">No documents</option>}
-              {documents.map((d) => (
-                <option key={d.id} value={d.id}>
-                  #{d.id} — {d.filename}
-                  {d.status !== "processed" ? ` (${d.status})` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+      {error && <Alert tone="error">{error}</Alert>}
 
-        {error && <div className="text-red-600 text-sm">{error}</div>}
-
-        {document && (
-          <section className="border border-gray-300 rounded-lg bg-white p-4 text-sm space-y-2">
-            <p className="font-medium">
-              {document.filename}{" "}
-              <span className="text-gray-500 font-normal">
-                · {document.source_type ?? "?"} · {document.status}
-                {document.page_count !== null ? ` · ${document.page_count} page(s)` : ""}
-              </span>
-            </p>
-
-            {report ? (
-              <ul className="text-xs text-gray-700 space-y-0.5">
-                <li>Pages with digital text: {report.pages_text}</li>
-                <li>Pages read with OCR: {report.pages_ocr}</li>
-                <li>Tables found: {report.tables}</li>
-                <li>Images with readable text: {report.images_ocr}</li>
-                {report.images_skipped > 0 && (
-                  <li>Images skipped (too small or no text): {report.images_skipped}</li>
-                )}
-                <li>OCR engine available: {report.ocr_available ? "yes" : "no"}</li>
-              </ul>
-            ) : (
-              <p className="text-xs text-gray-500">
-                No processing report (this file was uploaded before multimodal support).
-              </p>
-            )}
-
-            {report && report.notes.length > 0 && (
-              <ul className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 space-y-0.5">
-                {report.notes.map((note, i) => (
-                  <li key={i}>{note}</li>
-                ))}
-              </ul>
-            )}
-          </section>
-        )}
-
-        {chunks.length > 0 && (
-          <section className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => setFilter("all")}
-                className={`text-xs rounded-full px-3 py-1 border ${
-                  filter === "all" ? "bg-blue-600 text-white border-blue-600" : "bg-white border-gray-300"
-                }`}
+      {loadingDocs ? (
+        <Loading label="Loading documents…" />
+      ) : documents.length === 0 ? (
+        <EmptyState
+          icon={<InspectIcon className="h-8 w-8" />}
+          title="No documents to inspect"
+          description={`Upload a file to ${workspace?.name ?? "this workspace"} to see how it was processed.`}
+          action={
+            <ButtonLink href="/upload" variant="primary">
+              Upload a document
+            </ButtonLink>
+          }
+        />
+      ) : (
+        <>
+          <Card>
+            <Field label="Document" hint={`Documents in ${workspace?.name ?? "the active workspace"}`}>
+              <select
+                value={documentId ?? ""}
+                onChange={(e) => setDocumentId(Number(e.target.value))}
+                className={inputClass}
               >
-                All ({chunks.length})
-              </button>
-              {Object.keys(counts).map((type) => (
-                <button
-                  key={type}
-                  onClick={() => setFilter(type)}
-                  className={`text-xs rounded-full px-3 py-1 border ${
-                    filter === type ? "bg-blue-600 text-white border-blue-600" : "bg-white border-gray-300"
-                  }`}
-                >
-                  {TYPE_LABEL[type] ?? type} ({counts[type]})
-                </button>
-              ))}
-            </div>
+                {documents.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    #{d.id} — {d.filename}
+                    {d.status !== "processed" ? ` (${d.status})` : ""}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </Card>
 
-            {visible.map((chunk) => (
-              <div key={chunk.id} className="border border-gray-300 rounded-lg bg-white p-3 space-y-2">
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <span className={`px-2 py-0.5 rounded font-medium ${TYPE_STYLE[chunk.chunk_type] ?? "bg-gray-100"}`}>
-                    {TYPE_LABEL[chunk.chunk_type] ?? chunk.chunk_type}
-                  </span>
-                  <span className="text-gray-500">
-                    chunk {chunk.chunk_index}
-                    {chunk.page_number !== null ? ` · page ${chunk.page_number}` : ""}
-                  </span>
-                  {chunk.ocr_confidence !== null && (
-                    <span
-                      className={
-                        chunk.ocr_confidence < 0.8 ? "text-red-600 font-medium" : "text-gray-500"
-                      }
-                    >
-                      OCR confidence {Math.round(chunk.ocr_confidence * 100)}%
-                    </span>
+          {document && (
+            <Card
+              title={<span className="break-all">{document.filename}</span>}
+              description={
+                <>
+                  {document.source_type ?? "?"}
+                  {document.page_count !== null ? ` · ${document.page_count} page(s)` : ""}
+                </>
+              }
+              actions={<StatusBadge status={document.status} />}
+            >
+              {report ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                    <Stat label="Digital text pages" value={report.pages_text} />
+                    <Stat label="OCR pages" value={report.pages_ocr} />
+                    <Stat label="Tables" value={report.tables} />
+                    <Stat label="Images with text" value={report.images_ocr} />
+                    {report.images_skipped > 0 && (
+                      <Stat label="Images skipped" value={report.images_skipped} hint="Too small or no text" />
+                    )}
+                    <Stat label="OCR engine" value={report.ocr_available ? "Yes" : "No"} hint="Available" />
+                  </div>
+                  {report.notes.length > 0 && (
+                    <Alert tone="warning">
+                      <ul className="space-y-0.5">
+                        {report.notes.map((note, i) => (
+                          <li key={i}>{note}</li>
+                        ))}
+                      </ul>
+                    </Alert>
                   )}
                 </div>
-                <ChunkBody chunk={chunk} />
-              </div>
-            ))}
-          </section>
-        )}
+              ) : (
+                <p className="text-sm text-slate-500">
+                  No processing report (this file was uploaded before multimodal support).
+                </p>
+              )}
+            </Card>
+          )}
 
-        <div className="flex justify-between text-sm pt-2">
-          <a href="/upload" className="text-blue-600 underline">
-            ← Upload
-          </a>
-          <a href="/documents" className="text-blue-600 underline">
-            Documents →
-          </a>
-        </div>
-      </div>
-    </main>
+          {loadingChunks ? (
+            <Loading label="Loading chunks…" />
+          ) : (
+            chunks.length > 0 && (
+              <section className="space-y-3">
+                <div className="overflow-x-auto">
+                  <Segmented options={filterOptions} value={filter} onChange={setFilter} />
+                </div>
+
+                <div className="space-y-3">
+                  {visible.map((chunk) => (
+                    <div key={chunk.id} className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-card">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <Badge tone={TYPE_TONE[chunk.chunk_type] ?? "neutral"}>
+                          {TYPE_LABEL[chunk.chunk_type] ?? chunk.chunk_type}
+                        </Badge>
+                        <span className="text-slate-500">
+                          chunk {chunk.chunk_index}
+                          {chunk.page_number !== null ? ` · page ${chunk.page_number}` : ""}
+                        </span>
+                        {chunk.ocr_confidence !== null && (
+                          <span
+                            className={
+                              chunk.ocr_confidence < 0.8 ? "font-medium text-red-600" : "text-slate-500"
+                            }
+                          >
+                            OCR confidence {Math.round(chunk.ocr_confidence * 100)}%
+                          </span>
+                        )}
+                      </div>
+                      <ChunkBody chunk={chunk} />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )
+          )}
+        </>
+      )}
+    </div>
   );
 }

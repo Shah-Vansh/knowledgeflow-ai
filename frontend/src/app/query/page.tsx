@@ -1,106 +1,147 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { askQuestion, QueryResponse } from "@/lib/query";
 import { listDocuments, DocumentSummary } from "@/lib/documents";
+import { useWorkspace } from "@/lib/workspace-context";
+import { Alert, Badge, Button, Card, Field, PageHeader, inputClass } from "@/components/ui";
+import { ChevronIcon, DocumentsIcon } from "@/components/icons";
 
 export default function QueryPage() {
+  const { workspaceId } = useWorkspace();
   const [question, setQuestion] = useState("");
   const [result, setResult] = useState<QueryResponse | null>(null);
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
   useEffect(() => {
+    setSelectedIds([]);
+    setResult(null);
+    setError("");
     listDocuments("processed").then(setDocuments).catch(() => {});
-  }, []);
+  }, [workspaceId]);
 
   const toggleDocument = (id: number) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
   const handleAsk = async () => {
     if (!question.trim()) return;
     setLoading(true);
     setResult(null);
+    setError("");
     try {
       const data = await askQuestion(question, selectedIds);
       setResult(data);
     } catch (err) {
-      setResult({ answer: err instanceof Error ? err.message : "Query failed", sources: [] });
+      setError(err instanceof Error ? err.message : "Query failed");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center p-8">
-      <h1 className="text-2xl font-bold mb-6">Ask a Question</h1>
-      <div className="w-full max-w-lg space-y-4">
-        <textarea
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          placeholder="What would you like to know?"
-          className="w-full border border-gray-300 rounded-lg p-3 text-sm"
-          rows={3}
-        />
+    <div className="space-y-6">
+      <PageHeader
+        title="Quick answer"
+        description="Ask a one-off question and get an answer grounded in your processed documents, with the sources it used. Optionally scope it to specific documents."
+      />
 
-        {documents.length > 0 && (
-          <details className="text-sm border border-gray-300 rounded-lg p-3 bg-white">
-            <summary className="cursor-pointer font-medium">
-              Scope to specific documents (optional — {selectedIds.length} selected)
-            </summary>
-            <div className="mt-3 space-y-1 max-h-40 overflow-y-auto">
-              {documents.map((d) => (
-                <label key={d.id} className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.includes(d.id)}
-                    onChange={() => toggleDocument(d.id)}
-                  />
-                  <span>#{d.id} — {d.filename}</span>
-                </label>
-              ))}
-            </div>
-          </details>
-        )}
+      <Card>
+        <div className="space-y-4">
+          <Field label="Question">
+            <textarea
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              placeholder="What would you like to know?"
+              className={inputClass}
+              rows={3}
+            />
+          </Field>
 
-        <button
-          onClick={handleAsk}
-          disabled={!question.trim() || loading}
-          className="w-full bg-blue-600 text-white rounded-lg py-2 disabled:opacity-50"
-        >
-          {loading ? "Thinking..." : "Ask"}
-        </button>
-
-        {result && (
-          <div className="rounded-lg border border-gray-300 p-4 bg-white space-y-3">
-            <p className="font-semibold">{result.answer}</p>
-            {result.sources.length > 0 && (
-              <div className="text-xs text-gray-500">
-                <p className="font-medium mb-1">Sources:</p>
-                <ul className="list-disc list-inside space-y-1">
-                  {result.sources.map((s) => (
-                    <li key={`${s.document_id}-${s.page_number ?? "na"}`}>
-                      {s.filename}
-                      {s.page_number !== null ? ` — page ${s.page_number}` : ""}
-                      {" "}(relevance score: {s.score.toFixed(3)})
-                    </li>
-                  ))}
-                </ul>
+          {documents.length > 0 && (
+            <details className="group rounded-lg border border-slate-200 bg-slate-50/60">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-sm font-medium text-slate-700">
+                <span>
+                  Scope to specific documents{" "}
+                  <span className="font-normal text-slate-500">(optional)</span>
+                </span>
+                <span className="flex items-center gap-2">
+                  <Badge tone={selectedIds.length > 0 ? "brand" : "neutral"}>{selectedIds.length} selected</Badge>
+                  <ChevronIcon className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180" />
+                </span>
+              </summary>
+              <div className="scrollbar-thin max-h-48 space-y-0.5 overflow-y-auto border-t border-slate-200 p-2">
+                {documents.map((d) => (
+                  <label
+                    key={d.id}
+                    className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-slate-700 hover:bg-white"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(d.id)}
+                      onChange={() => toggleDocument(d.id)}
+                      className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                    />
+                    <span className="font-mono text-xs text-slate-400">#{d.id}</span>
+                    <span className="truncate">{d.filename}</span>
+                  </label>
+                ))}
               </div>
-            )}
-          </div>
-        )}
+            </details>
+          )}
 
-        <div className="flex justify-between text-sm">
-          <a href="/upload" className="text-blue-600 underline">← Go to Upload page</a>
-          <a href="/documents" className="text-blue-600 underline">Manage Documents →</a>
+          {documents.length === 0 && (
+            <p className="text-xs text-slate-500">
+              No processed documents in this workspace yet.{" "}
+              <Link href="/upload" className="font-medium text-brand-600 hover:text-brand-700">
+                Upload some
+              </Link>{" "}
+              to get grounded answers.
+            </p>
+          )}
+
+          <div className="flex items-center justify-end">
+            <Button onClick={handleAsk} disabled={!question.trim()} loading={loading}>
+              {loading ? "Thinking…" : "Ask"}
+            </Button>
+          </div>
         </div>
-      </div>
-    </main>
+      </Card>
+
+      {error && <Alert tone="error">{error}</Alert>}
+
+      {result && (
+        <Card title="Answer">
+          <p className="whitespace-pre-wrap text-sm leading-6 text-slate-900">{result.answer}</p>
+        </Card>
+      )}
+
+      {result && result.sources.length > 0 && (
+        <Card title="Sources" description="The documents the answer was grounded in." padded={false}>
+          <ul className="divide-y divide-slate-100">
+              {result.sources.map((s) => (
+                <li
+                  key={`${s.document_id}-${s.page_number ?? "na"}`}
+                  className="flex items-center justify-between gap-3 px-5 py-3 text-sm"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <DocumentsIcon className="h-4 w-4 shrink-0 text-slate-400" />
+                    <span className="truncate font-medium text-slate-900">{s.filename}</span>
+                    {s.page_number !== null && <Badge>page {s.page_number}</Badge>}
+                  </span>
+                  <span className="shrink-0 font-mono text-xs text-slate-500" title="Relevance score">
+                    relevance {s.score.toFixed(3)}
+                  </span>
+                </li>
+              ))}
+          </ul>
+        </Card>
+      )}
+    </div>
   );
 }

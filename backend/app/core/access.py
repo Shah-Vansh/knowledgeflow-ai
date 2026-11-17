@@ -78,6 +78,7 @@ POLICIES: Dict[Tuple[str, str], Policy] = {
     ("POST", "/auth/register"): public(rate="auth"),
     ("POST", "/auth/login"): public(rate="auth"),
     ("GET", "/auth/me"): authenticated(),
+    ("POST", "/auth/logout-all"): authenticated(rate="auth"),
     # ---- workspaces
     ("GET", "/workspaces"): authenticated(),
     ("POST", "/workspaces"): authenticated(),
@@ -237,7 +238,7 @@ def _resolve_workspace(db, resource: str, resource_id: int) -> Optional[int]:
     return row[0] if row else None
 
 
-def _authorize(user_id: int, policy: Policy, resource_id: Optional[int]):
+def _authorize(user_id: int, policy: Policy, resource_id: Optional[int], token_version: int = 0):
     """Runs in a worker thread with its own short-lived session."""
     from app.db.models import User, WorkspaceMember
     from app.db.session import SessionLocal
@@ -245,7 +246,7 @@ def _authorize(user_id: int, policy: Policy, resource_id: Optional[int]):
     db = SessionLocal()
     try:
         user = db.get(User, user_id)
-        if user is None or not user.is_active:
+        if user is None or not user.is_active or user.token_version != token_version:
             raise _unauthorized("Invalid or expired token")
         auth_user = AuthUser(id=user.id, email=user.email)
         if policy.kind != "workspace":
@@ -301,7 +302,7 @@ async def enforce_access(request: Request) -> None:
         if resource_id is None:
             raise HTTPException(status_code=422, detail=f"{policy.param} must be an integer")
 
-    user, workspace_id, role = await run_in_threadpool(_authorize, user_id, policy, resource_id)
+    user, workspace_id, role = await run_in_threadpool(_authorize, user_id, policy, resource_id, claims["ver"])
     request.state.user = user
     request.state.workspace_id = workspace_id
     request.state.workspace_role = role

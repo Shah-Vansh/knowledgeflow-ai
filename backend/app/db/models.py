@@ -32,6 +32,8 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Bumped by "log out everywhere": tokens carrying an older version stop working
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
 
 class WorkspaceMember(Base):
@@ -74,6 +76,8 @@ class Document(Base):
     page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     source_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     deleted_at: Mapped[Optional[object]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # SHA-256 of the uploaded bytes: the same file can't be added to a workspace twice
+    content_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     workspace_id: Mapped[int] = mapped_column(
         ForeignKey("workspaces.id"), nullable=False, server_default=text("1"), index=True

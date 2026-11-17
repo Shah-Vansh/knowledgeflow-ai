@@ -1,39 +1,51 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { listDocuments, deleteDocument, DocumentSummary } from "@/lib/documents";
-import { listWorkspaces, Workspace } from "@/lib/workspaces";
+import { useWorkspace } from "@/lib/workspace-context";
+import {
+  Alert,
+  Button,
+  ButtonLink,
+  Card,
+  EmptyState,
+  Loading,
+  PageHeader,
+  StatusBadge,
+} from "@/components/ui";
+import { DocumentsIcon, UploadIcon } from "@/components/icons";
 
 export default function DocumentsPage() {
+  const { workspaceId, workspace, refresh } = useWorkspace();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [filter, setFilter] = useState<number | "all">("all");
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
-  const load = (selected: number | "all" = filter) => {
-    listDocuments(undefined, selected === "all" ? undefined : selected)
-      .then(setDocuments)
-      .catch(() => setError("Could not load documents"));
-  };
+  const load = useCallback(() => {
+    return listDocuments(undefined, workspaceId)
+      .then((list) => {
+        setDocuments(list);
+        setError("");
+      })
+      .catch(() => setError("Could not load documents"))
+      .finally(() => setLoading(false));
+  }, [workspaceId]);
 
   useEffect(() => {
-    listWorkspaces().then(setWorkspaces).catch(() => {});
-  }, []);
+    setLoading(true);
+    setDocuments([]);
+    load();
+  }, [load]);
 
-  useEffect(() => {
-    load(filter);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter]);
-
-  const workspaceName = (id: number) => workspaces.find((w) => w.id === id)?.name ?? `#${id}`;
-
-  const handleDelete = async (id: number) => {
-    setDeletingId(id);
+  const handleDelete = async (doc: DocumentSummary) => {
+    if (!window.confirm(`Delete "${doc.filename}"? Its chunks will be removed from search.`)) return;
+    setDeletingId(doc.id);
     setError("");
     try {
-      await deleteDocument(id);
-      load();
+      await deleteDocument(doc.id);
+      await load();
+      refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed");
     } finally {
@@ -42,61 +54,81 @@ export default function DocumentsPage() {
   };
 
   return (
-    <main className="min-h-screen p-8 flex flex-col items-center">
-      <h1 className="text-2xl font-bold mb-6">Documents</h1>
-      <div className="w-full max-w-2xl space-y-3">
-        <label className="block text-sm">
-          Workspace
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value === "all" ? "all" : Number(e.target.value))}
-            className="block w-full border border-gray-300 rounded p-2 mt-1 bg-white"
-          >
-            <option value="all">All workspaces</option>
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-          </select>
-        </label>
+    <div className="space-y-6">
+      <PageHeader
+        title="Documents"
+        description={`Files uploaded to ${workspace?.name ?? "this workspace"}. Deleting a document removes it and its chunks from retrieval.`}
+        actions={
+          <ButtonLink href="/upload" variant="primary">
+            <UploadIcon className="h-4 w-4" />
+            Upload
+          </ButtonLink>
+        }
+      />
 
-        {error && <div className="text-red-600 text-sm">{error}</div>}
-        {documents.length === 0 && <p className="text-sm text-gray-500">No documents here yet.</p>}
-        {documents.map((d) => (
-          <div
-            key={d.id}
-            className="border border-gray-300 rounded-lg p-3 bg-white flex items-center justify-between"
-          >
-            <div className="text-sm">
-              <p className="font-medium">
-                #{d.id} — {d.filename}
-              </p>
-              <p className="text-gray-500">
-                {workspaceName(d.workspace_id)} · {d.status}
-                {d.source_type ? ` · ${d.source_type}` : ""}
-                {d.page_count !== null ? ` · ${d.page_count} page(s)` : ""}
-                {d.uploaded_at ? ` · uploaded ${new Date(d.uploaded_at).toLocaleString()}` : ""}
-              </p>
-            </div>
-            <button
-              onClick={() => handleDelete(d.id)}
-              disabled={deletingId === d.id}
-              className="text-red-600 border border-red-300 rounded px-3 py-1 text-sm disabled:opacity-50"
-            >
-              {deletingId === d.id ? "Deleting..." : "Delete"}
-            </button>
+      {error && <Alert tone="error">{error}</Alert>}
+
+      {loading ? (
+        <Loading label="Loading documents…" />
+      ) : documents.length === 0 ? (
+        <EmptyState
+          icon={<DocumentsIcon className="h-8 w-8" />}
+          title="No documents here yet"
+          description={`Upload a PDF, text file or image to ${workspace?.name ?? "this workspace"} to start asking questions about it.`}
+          action={
+            <ButtonLink href="/upload" variant="primary">
+              Upload a document
+            </ButtonLink>
+          }
+        />
+      ) : (
+        <Card padded={false}>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                  <th className="px-5 py-3">Filename</th>
+                  <th className="px-3 py-3">Status</th>
+                  <th className="px-3 py-3">Type</th>
+                  <th className="px-3 py-3">Pages</th>
+                  <th className="px-3 py-3">Uploaded</th>
+                  <th className="px-5 py-3 text-right">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {documents.map((d) => (
+                  <tr key={d.id} className="hover:bg-slate-50">
+                    <td className="px-5 py-3">
+                      <p className="font-medium text-slate-900 break-all">{d.filename}</p>
+                      <p className="text-xs text-slate-500">#{d.id}</p>
+                    </td>
+                    <td className="px-3 py-3">
+                      <StatusBadge status={d.status} />
+                    </td>
+                    <td className="px-3 py-3 text-slate-600">{d.source_type ?? "—"}</td>
+                    <td className="px-3 py-3 tabular-nums text-slate-600">{d.page_count ?? "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-slate-600">
+                      {d.uploaded_at ? new Date(d.uploaded_at).toLocaleString() : "—"}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        loading={deletingId === d.id}
+                        onClick={() => handleDelete(d)}
+                      >
+                        {deletingId === d.id ? "Deleting..." : "Delete"}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        ))}
-        <div className="flex justify-between text-sm pt-2">
-          <a href="/upload" className="text-blue-600 underline">
-            ← Upload
-          </a>
-          <a href="/chat" className="text-blue-600 underline">
-            Chat →
-          </a>
-        </div>
-      </div>
-    </main>
+        </Card>
+      )}
+    </div>
   );
 }

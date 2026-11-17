@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listWorkspaces, Workspace } from "@/lib/workspaces";
+import { useWorkspace } from "@/lib/workspace-context";
 import { EvalSetSummary, listSets } from "@/lib/eval";
 import {
   Comparison,
@@ -14,6 +14,18 @@ import {
   listExperiments,
   runVariant,
 } from "@/lib/experiments";
+import {
+  Alert,
+  Badge,
+  Button,
+  ButtonLink,
+  Card,
+  cx,
+  EmptyState,
+  Field,
+  inputClass,
+  PageHeader,
+} from "@/components/ui";
 
 const PRESETS: Record<string, unknown[]> = {
   "Retrieval ablation": [
@@ -46,6 +58,9 @@ const COLUMNS: { key: string; label: string }[] = [
   { key: "correctness", label: "Correct" },
 ];
 
+const TH = "px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-500";
+const TD = "px-3 py-2";
+
 function value(row: ComparisonRow, key: string): number | undefined {
   if (!row.metrics) return undefined;
   if (key === "faithfulness" || key === "correctness") return row.metrics.generation?.[key];
@@ -55,18 +70,28 @@ function value(row: ComparisonRow, key: string): number | undefined {
 
 function DeltaText({ delta }: { delta: Delta | undefined }) {
   if (!delta) return null;
-  const color = !delta.significant ? "text-gray-400" : delta.mean > 0 ? "text-green-700" : "text-red-600";
   const sign = delta.mean > 0 ? "+" : "";
+  const title = `95% interval ${delta.ci_low.toFixed(3)} to ${delta.ci_high.toFixed(3)} over ${delta.n} questions`;
+  if (!delta.significant) {
+    return (
+      <span className="mt-0.5 block text-xs text-slate-400" title={title}>
+        {sign}
+        {delta.mean.toFixed(3)}
+      </span>
+    );
+  }
   return (
-    <span className={`block ${color}`} title={`95% interval ${delta.ci_low.toFixed(3)} to ${delta.ci_high.toFixed(3)} over ${delta.n} questions`}>
-      {sign}{delta.mean.toFixed(3)} {delta.significant ? "✓" : ""}
+    <span className="mt-1 block" title={title}>
+      <Badge tone={delta.mean > 0 ? "success" : "danger"}>
+        {sign}
+        {delta.mean.toFixed(3)} ✓
+      </Badge>
     </span>
   );
 }
 
 export default function ExperimentsPage() {
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [workspaceId, setWorkspaceId] = useState<number | null>(null);
+  const { workspaceId, workspace } = useWorkspace();
   const [sets, setSets] = useState<EvalSetSummary[]>([]);
   const [setId, setSetId] = useState<number | null>(null);
   const [name, setName] = useState("");
@@ -82,17 +107,11 @@ export default function ExperimentsPage() {
   const fail = (err: unknown) => setError(err instanceof Error ? err.message : "Something went wrong");
 
   useEffect(() => {
-    listWorkspaces()
-      .then((list) => {
-        setWorkspaces(list);
-        if (list.length > 0) setWorkspaceId(list[0].id);
-      })
-      .catch(fail);
     listExperiments().then(setExperiments).catch(fail);
   }, []);
 
   useEffect(() => {
-    if (workspaceId === null) return;
+    setSets([]);
     setSetId(null);
     listSets(workspaceId).then(setSets).catch(fail);
   }, [workspaceId]);
@@ -150,125 +169,185 @@ export default function ExperimentsPage() {
   const maxMrr = Math.max(0.0001, ...(comparison?.variants.map((v) => value(v, "mrr") ?? 0) ?? [0]));
 
   return (
-    <main className="min-h-screen p-8 flex flex-col items-center">
-      <h1 className="text-2xl font-bold mb-2">Experiments</h1>
-      <p className="text-sm text-gray-500 mb-6 text-center max-w-2xl">
-        Compare settings on the same golden set. The first variant is the baseline; every other one is
-        compared with it question by question. Grey differences are within chance, and ✓ means the 95%
-        interval excludes zero. With a small set, expect few ✓.
-      </p>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Lab"
+        title="Experiments"
+        description="Compare settings on the same golden set. The first variant is the baseline; every other one is compared with it question by question. Grey differences are within chance, and ✓ means the 95% interval excludes zero. With a small set, expect few ✓."
+      />
 
-      <div className="w-full max-w-5xl space-y-5">
-        {error && <div className="text-red-600 text-sm">{error}</div>}
+      {error && <Alert tone="error">{error}</Alert>}
 
-        <section className="border border-gray-300 rounded-lg bg-white p-4 space-y-3">
-          <h2 className="font-semibold text-sm">New experiment</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <label className="block text-sm">
-              Workspace
-              <select value={workspaceId ?? ""} onChange={(e) => setWorkspaceId(Number(e.target.value))}
-                className="block w-full border border-gray-300 rounded p-2 mt-1">
-                {workspaces.map((w) => (<option key={w.id} value={w.id}>{w.name}</option>))}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card title="New experiment" className="lg:col-span-2">
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Golden set" hint={workspace?.name ? `From ${workspace.name}` : undefined}>
+                <select
+                  value={setId ?? ""}
+                  onChange={(e) => setSetId(e.target.value ? Number(e.target.value) : null)}
+                  className={inputClass}
+                >
+                  <option value="">— choose —</option>
+                  {sets.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.question_count})
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Experiment name">
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Experiment name" className={inputClass} />
+              </Field>
+            </div>
+            <Field label="Preset">
+              <select value={preset} onChange={(e) => choosePreset(e.target.value)} className={inputClass}>
+                {Object.keys(PRESETS).map((key) => (
+                  <option key={key} value={key}>
+                    {key}
+                  </option>
+                ))}
               </select>
-            </label>
-            <label className="block text-sm">
-              Golden set
-              <select value={setId ?? ""} onChange={(e) => setSetId(e.target.value ? Number(e.target.value) : null)}
-                className="block w-full border border-gray-300 rounded p-2 mt-1">
-                <option value="">— choose —</option>
-                {sets.map((s) => (<option key={s.id} value={s.id}>{s.name} ({s.question_count})</option>))}
-              </select>
-            </label>
+            </Field>
+            <Field
+              label="Variants (editable JSON)"
+              hint={
+                <>
+                  Allowed fields: label, mode (dense|sparse|hybrid), rerank, transforms, generate, and chunking{" "}
+                  {"{strategy, chunk_size, overlap}"}. Chunking variants re-chunk your documents into a temporary copy;
+                  the real data is never changed.
+                </>
+              }
+            >
+              <textarea
+                value={variantsText}
+                onChange={(e) => setVariantsText(e.target.value)}
+                rows={10}
+                className={cx(inputClass, "font-mono text-xs")}
+              />
+            </Field>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={handleCreateAndRun} disabled={setId === null || !name.trim()} loading={busy}>
+                {busy ? progress || "Working..." : "Create and run all variants"}
+              </Button>
+              {sets.length === 0 && (
+                <span className="text-xs text-slate-500">
+                  No golden sets in this workspace yet.{" "}
+                  <ButtonLink href="/eval" variant="ghost" size="sm">
+                    Create one in Evaluation
+                  </ButtonLink>
+                </span>
+              )}
+            </div>
+            {errors.length > 0 && (
+              <Alert tone="error" title="Some variants failed">
+                <ul className="list-inside list-disc text-xs">
+                  {errors.map((e, i) => (
+                    <li key={i}>{e}</li>
+                  ))}
+                </ul>
+              </Alert>
+            )}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Experiment name"
-              className="border border-gray-300 rounded p-2 text-sm" />
-            <select value={preset} onChange={(e) => choosePreset(e.target.value)} className="border border-gray-300 rounded p-2 text-sm">
-              {Object.keys(PRESETS).map((key) => (<option key={key} value={key}>{key}</option>))}
-            </select>
-          </div>
-          <label className="block text-xs text-gray-600">
-            Variants (editable JSON). Allowed fields: label, mode (dense|sparse|hybrid), rerank, transforms, generate, and chunking {"{strategy, chunk_size, overlap}"}.
-            Chunking variants re-chunk your documents into a temporary copy; the real data is never changed.
-            <textarea value={variantsText} onChange={(e) => setVariantsText(e.target.value)} rows={9}
-              className="w-full border border-gray-300 rounded p-2 font-mono text-xs mt-1" />
-          </label>
-          <button onClick={handleCreateAndRun} disabled={busy || setId === null || !name.trim()}
-            className="bg-blue-600 text-white rounded px-4 py-2 text-sm disabled:opacity-50">
-            {busy ? progress || "Working..." : "Create and run all variants"}
-          </button>
-          {errors.length > 0 && (
-            <ul className="text-xs text-red-600 list-disc list-inside">
-              {errors.map((e, i) => (<li key={i}>{e}</li>))}
+        </Card>
+
+        <Card title="Past experiments" padded={false}>
+          {experiments.length === 0 ? (
+            <div className="p-5">
+              <EmptyState title="None yet." description="Create and run an experiment to compare settings." />
+            </div>
+          ) : (
+            <ul className="max-h-[32rem] divide-y divide-slate-100 overflow-y-auto">
+              {experiments.map((e) => (
+                <li
+                  key={e.id}
+                  className={cx(
+                    "flex items-center justify-between gap-2 px-5 py-3 text-sm",
+                    comparison?.experiment.id === e.id && "bg-brand-50/60"
+                  )}
+                >
+                  <button className="min-w-0 text-left" onClick={() => open(e.id)}>
+                    <span className="block truncate font-medium text-brand-700 hover:underline">
+                      #{e.id} {e.name}
+                    </span>
+                    <span className="text-xs text-slate-500">{e.variant_count} variants</span>
+                  </button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-600 hover:text-red-700"
+                    onClick={() =>
+                      deleteExperiment(e.id)
+                        .then(() => {
+                          setComparison(null);
+                          return listExperiments().then(setExperiments);
+                        })
+                        .catch(fail)
+                    }
+                  >
+                    Delete
+                  </Button>
+                </li>
+              ))}
             </ul>
           )}
-        </section>
+        </Card>
+      </div>
 
-        {comparison && (
-          <section className="border border-gray-300 rounded-lg bg-white p-4 space-y-3 overflow-x-auto">
-            <h2 className="font-semibold text-sm">{comparison.experiment.name}</h2>
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left border-b border-gray-200">
-                  <th className="py-1 pr-3">Variant</th>
-                  {COLUMNS.map((c) => (<th key={c.key} className="pr-3">{c.label}</th>))}
-                  <th className="pr-3">Retrieval ms</th>
-                  <th className="pr-3">LLM calls</th>
-                  <th>MRR</th>
+      {comparison && (
+        <Card
+          title={comparison.experiment.name}
+          description="Hover a difference to see its 95% interval. Scores computed on generated questions are optimistic."
+          padded={false}
+        >
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="border-b border-slate-200 bg-slate-50">
+                <tr>
+                  <th className={TH}>Variant</th>
+                  {COLUMNS.map((c) => (
+                    <th key={c.key} className={TH}>
+                      {c.label}
+                    </th>
+                  ))}
+                  <th className={TH}>Retrieval ms</th>
+                  <th className={TH}>LLM calls</th>
+                  <th className={TH}>MRR</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100 align-top tabular-nums">
                 {comparison.variants.map((row) => (
-                  <tr key={row.index} className="border-b border-gray-100 align-top">
-                    <td className="py-1 pr-3 font-medium">
+                  <tr key={row.index}>
+                    <td className={cx(TD, "font-medium text-slate-900")}>
                       {row.label}
-                      {row.index === 0 && <span className="ml-1 text-gray-400 font-normal">(baseline)</span>}
+                      {row.index === 0 && <span className="ml-1 font-normal text-slate-400">(baseline)</span>}
                     </td>
                     {COLUMNS.map((c) => {
                       const v = value(row, c.key);
                       return (
-                        <td key={c.key} className="pr-3">
+                        <td key={c.key} className={TD}>
                           {v === undefined ? (row.run_id === null ? "…" : "—") : v.toFixed(3)}
                           <DeltaText delta={row.delta_vs_baseline?.[c.key]} />
                         </td>
                       );
                     })}
-                    <td className="pr-3">{row.metrics?.retrieval_ms !== undefined ? Math.round(row.metrics.retrieval_ms) : "—"}</td>
-                    <td className="pr-3">{row.run_id === null ? "—" : row.llm_calls}</td>
-                    <td className="w-32">
-                      <div className="h-3 bg-blue-500 rounded" style={{ width: `${((value(row, "mrr") ?? 0) / maxMrr) * 100}%` }} />
+                    <td className={TD}>{row.metrics?.retrieval_ms !== undefined ? Math.round(row.metrics.retrieval_ms) : "—"}</td>
+                    <td className={TD}>{row.run_id === null ? "—" : row.llm_calls}</td>
+                    <td className={cx(TD, "w-32")}>
+                      <div className="mt-1 h-2.5 w-full rounded-full bg-slate-100">
+                        <div
+                          className="h-2.5 rounded-full bg-brand-500"
+                          style={{ width: `${((value(row, "mrr") ?? 0) / maxMrr) * 100}%` }}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <p className="text-xs text-gray-400">
-              Hover a difference to see its 95% interval. Scores computed on generated questions are optimistic.
-            </p>
-          </section>
-        )}
-
-        <section className="border border-gray-300 rounded-lg bg-white p-4 space-y-2">
-          <h2 className="font-semibold text-sm">Past experiments</h2>
-          {experiments.length === 0 && <p className="text-xs text-gray-500">None yet.</p>}
-          {experiments.map((e) => (
-            <div key={e.id} className="flex items-center justify-between text-sm border border-gray-200 rounded p-2">
-              <button className="text-left text-blue-600 underline" onClick={() => open(e.id)}>
-                #{e.id} {e.name} <span className="text-gray-500 no-underline">· {e.variant_count} variants</span>
-              </button>
-              <button className="text-red-600 text-xs"
-                onClick={() => deleteExperiment(e.id).then(() => { setComparison(null); return listExperiments().then(setExperiments); }).catch(fail)}>
-                Delete
-              </button>
-            </div>
-          ))}
-        </section>
-
-        <div className="flex justify-between text-sm pt-2">
-          <a href="/eval" className="text-blue-600 underline">← Evaluation</a>
-          <a href="/chat" className="text-blue-600 underline">Chat →</a>
-        </div>
-      </div>
-    </main>
+          </div>
+        </Card>
+      )}
+    </div>
   );
 }

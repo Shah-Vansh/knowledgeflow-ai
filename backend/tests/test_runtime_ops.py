@@ -142,14 +142,14 @@ def test_not_ready_when_database_down(monkeypatch):
 
 
 def test_not_ready_when_migrations_are_behind(monkeypatch):
-    monkeypatch.setattr(health_module, "current_migration", lambda: "0009")
+    monkeypatch.setattr(health_module, "current_migration", lambda: "0010")
     response = client.get("/health/ready")
     assert response.status_code == 503
     assert response.json()["checks"]["migrations"] is False
 
 
 def test_expected_head_matches_the_newest_migration():
-    assert health_module.expected_migration_head() == "0010"
+    assert health_module.expected_migration_head() == "0011"
 
 
 # ------------------------------------------------------------------ metrics

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { listWorkspaces, Workspace } from "@/lib/workspaces";
+import { useWorkspace } from "@/lib/workspace-context";
 import {
   ChatMessage,
   ConversationSummary,
@@ -11,10 +11,11 @@ import {
   listConversations,
   sendMessage,
 } from "@/lib/conversations";
+import { Alert, Badge, Button, ButtonLink, PageHeader, Spinner, cx, inputClass } from "@/components/ui";
+import { ChatIcon, CloseIcon, DocumentsIcon } from "@/components/icons";
 
 export default function ChatPage() {
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [workspaceId, setWorkspaceId] = useState<number | null>(null);
+  const { workspaceId, workspace } = useWorkspace();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -23,29 +24,20 @@ export default function ChatPage() {
   const [error, setError] = useState("");
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    listWorkspaces()
-      .then((list) => {
-        setWorkspaces(list);
-        if (list.length > 0) setWorkspaceId(list[0].id);
-      })
-      .catch(() => setError("Could not load workspaces"));
-  }, []);
-
   const refreshConversations = (forWorkspace: number) =>
     listConversations(forWorkspace)
       .then(setConversations)
       .catch(() => setError("Could not load conversations"));
 
   useEffect(() => {
-    if (workspaceId === null) return;
     setActiveId(null);
     setMessages([]);
+    setError("");
     refreshConversations(workspaceId);
   }, [workspaceId]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [messages, sending]);
 
   const openConversation = async (id: number) => {
@@ -70,7 +62,7 @@ export default function ChatPage() {
     try {
       await deleteConversation(id);
       if (activeId === id) startNewChat();
-      if (workspaceId !== null) refreshConversations(workspaceId);
+      refreshConversations(workspaceId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not delete conversation");
     }
@@ -78,10 +70,23 @@ export default function ChatPage() {
 
   const handleSend = async () => {
     const text = input.trim();
-    if (!text || workspaceId === null || sending) return;
+    if (!text || sending) return;
 
     setSending(true);
     setError("");
+    // Show the question at once (like any chat app) and clear the box; the server's
+    // saved copy replaces this placeholder when the answer arrives.
+    const pendingId = -Date.now();
+    const pending: ChatMessage = {
+      id: pendingId,
+      role: "user",
+      content: text,
+      sources: [],
+      standalone_question: null,
+      created_at: null,
+    };
+    setMessages((prev) => [...prev, pending]);
+    setInput("");
     try {
       let conversationId = activeId;
       if (conversationId === null) {
@@ -91,153 +96,181 @@ export default function ChatPage() {
       }
 
       const result = await sendMessage(conversationId, text);
-      setMessages((prev) => [...prev, result.user_message, result.assistant_message]);
-      setInput("");
+      setMessages((prev) => [
+        ...prev.filter((m) => m.id !== pendingId),
+        result.user_message,
+        result.assistant_message,
+      ]);
       refreshConversations(workspaceId);
     } catch (err) {
+      setMessages((prev) => prev.filter((m) => m.id !== pendingId));
+      setInput(text); // give the question back so it can be sent again
       setError(err instanceof Error ? err.message : "Could not send message");
     } finally {
       setSending(false);
     }
   };
 
+  const activeTitle = conversations.find((c) => c.id === activeId)?.title;
+
   return (
-    <main className="min-h-screen p-4 md:p-8 flex justify-center">
-      <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4">
-        <aside className="border border-gray-300 rounded-lg bg-white p-3 space-y-3 h-fit">
-          <label className="block text-sm">
-            Workspace
-            <select
-              value={workspaceId ?? ""}
-              onChange={(e) => setWorkspaceId(Number(e.target.value))}
-              className="block w-full border border-gray-300 rounded p-1 mt-1"
-            >
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name} ({w.document_count})
-                </option>
-              ))}
-            </select>
-          </label>
+    <div className="space-y-6">
+      <PageHeader
+        title="Chat"
+        description={
+          <>
+            Have a conversation with the documents in {workspace?.name ?? "this workspace"}. Follow-up
+            questions like &ldquo;what is their main advantage?&rdquo; are understood using the conversation.
+          </>
+        }
+      />
 
-          <button
-            onClick={startNewChat}
-            className="w-full border border-blue-600 text-blue-600 rounded-lg py-1.5 text-sm"
-          >
-            + New chat
-          </button>
-
-          <div className="space-y-1 max-h-80 overflow-y-auto">
-            {conversations.length === 0 && (
-              <p className="text-xs text-gray-500">No conversations in this workspace yet.</p>
-            )}
-            {conversations.map((c) => (
-              <div
-                key={c.id}
-                className={`flex items-center justify-between gap-2 rounded px-2 py-1 text-sm ${
-                  c.id === activeId ? "bg-blue-50 border border-blue-200" : "hover:bg-gray-50"
-                }`}
-              >
-                <button
-                  onClick={() => openConversation(c.id)}
-                  className="text-left truncate flex-1"
-                  title={c.title}
-                >
-                  {c.title}
-                </button>
-                <button
-                  onClick={() => removeConversation(c.id)}
-                  className="text-xs text-red-600"
-                  aria-label={`Delete conversation ${c.title}`}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
+      <div className="grid grid-cols-1 gap-4 lg:h-[calc(100vh-11rem)] lg:grid-cols-[260px_1fr]">
+        {/* conversation list */}
+        <aside className="flex min-h-0 flex-col rounded-xl border border-slate-200 bg-white shadow-card">
+          <div className="border-b border-slate-100 p-3">
+            <Button onClick={startNewChat} variant="secondary" className="w-full">
+              + New chat
+            </Button>
           </div>
-
-          <div className="text-xs text-gray-500 flex justify-between pt-1">
-            <a href="/workspaces" className="text-blue-600 underline">
-              Workspaces
-            </a>
-            <a href="/upload" className="text-blue-600 underline">
-              Upload
-            </a>
+          <div className="scrollbar-thin max-h-64 min-h-0 flex-1 overflow-y-auto p-2 lg:max-h-none">
+            {conversations.length === 0 ? (
+              <p className="px-2 py-6 text-center text-xs text-slate-500">
+                No conversations in this workspace yet. Ask a question to start one.
+              </p>
+            ) : (
+              <ul className="space-y-0.5">
+                {conversations.map((c) => {
+                  const active = c.id === activeId;
+                  return (
+                    <li
+                      key={c.id}
+                      className={cx(
+                        "group flex items-center gap-1 rounded-lg text-sm transition-colors",
+                        active ? "bg-brand-50 text-brand-700" : "text-slate-700 hover:bg-slate-100"
+                      )}
+                    >
+                      <button
+                        onClick={() => openConversation(c.id)}
+                        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
+                        title={c.title}
+                      >
+                        <ChatIcon className={cx("h-4 w-4 shrink-0", active ? "text-brand-600" : "text-slate-400")} />
+                        <span className="truncate">{c.title}</span>
+                      </button>
+                      <button
+                        onClick={() => removeConversation(c.id)}
+                        className="mr-1 rounded-md p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                        aria-label={`Delete conversation ${c.title}`}
+                        title="Delete conversation"
+                      >
+                        <CloseIcon className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         </aside>
 
-        <section className="border border-gray-300 rounded-lg bg-white flex flex-col min-h-[70vh]">
-          <div className="flex-1 p-4 space-y-4 overflow-y-auto">
-            {messages.length === 0 && (
-              <p className="text-sm text-gray-500">
-                Ask a question about the documents in this workspace. Follow-up questions like
-                &ldquo;what is their main advantage?&rdquo; are understood using the conversation.
-              </p>
-            )}
+        {/* thread */}
+        <section className="flex h-[70vh] min-h-0 flex-col rounded-xl border border-slate-200 bg-slate-50/60 shadow-card lg:h-auto">
+          <div className="flex items-center justify-between gap-3 rounded-t-xl border-b border-slate-200 bg-white px-5 py-3">
+            <p className="truncate text-sm font-semibold text-slate-900">{activeTitle ?? "New conversation"}</p>
+            {workspace && <Badge tone="brand">{workspace.name}</Badge>}
+          </div>
 
-            {messages.map((m) => (
-              <div key={m.id} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
-                <div
-                  className={`max-w-[85%] rounded-lg p-3 text-sm space-y-2 ${
-                    m.role === "user" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-900"
-                  }`}
-                >
-                  <p className="whitespace-pre-wrap">{m.content}</p>
-
-                  {m.role === "assistant" && m.standalone_question && (
-                    <p className="text-xs italic text-gray-500">
-                      Searched as: {m.standalone_question}
-                    </p>
-                  )}
-
-                  {m.role === "assistant" && m.sources.length > 0 && (
-                    <div className="text-xs text-gray-600">
-                      <p className="font-medium">Sources</p>
-                      <ul className="list-disc list-inside">
-                        {m.sources.map((s) => (
-                          <li key={`${s.document_id}-${s.page_number ?? "na"}`}>
-                            {s.filename}
-                            {s.page_number !== null ? ` — page ${s.page_number}` : ""}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+          <div className="scrollbar-thin min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
+            {messages.length === 0 && !sending && (
+              <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+                <ChatIcon className="mb-3 h-8 w-8 text-slate-300" />
+                <p className="text-sm font-medium text-slate-900">Ask a question about this workspace</p>
+                <p className="mt-1 max-w-sm text-sm text-slate-500">
+                  Answers cite the documents they came from. No documents yet?
+                </p>
+                <div className="mt-4">
+                  <ButtonLink href="/upload" size="sm">
+                    <DocumentsIcon className="h-4 w-4" />
+                    Upload documents
+                  </ButtonLink>
                 </div>
               </div>
-            ))}
+            )}
 
-            {sending && <p className="text-sm text-gray-500">Thinking...</p>}
+            {messages.map((m) =>
+              m.role === "user" ? (
+                <div key={m.id} className="flex justify-end">
+                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand-600 px-4 py-2.5 text-sm leading-6 text-white shadow-sm">
+                    <p className="whitespace-pre-wrap">{m.content}</p>
+                  </div>
+                </div>
+              ) : (
+                <div key={m.id} className="flex justify-start">
+                  <div className="max-w-[85%] space-y-3 rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-900 shadow-sm">
+                    <p className="whitespace-pre-wrap">{m.content}</p>
+
+                    {m.standalone_question && (
+                      <p className="text-xs italic text-slate-400">Searched as: {m.standalone_question}</p>
+                    )}
+
+                    {m.sources.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2">
+                        <span className="text-xs font-medium text-slate-500">Sources</span>
+                        {m.sources.map((s) => (
+                          <Badge key={`${s.document_id}-${s.page_number ?? "na"}`}>
+                            {s.filename}
+                            {s.page_number !== null ? ` · p.${s.page_number}` : ""}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            )}
+
+            {sending && (
+              <div className="flex justify-start">
+                <div className="flex items-center gap-2 rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 shadow-sm">
+                  <Spinner className="h-4 w-4" />
+                  Thinking…
+                </div>
+              </div>
+            )}
             <div ref={bottomRef} />
           </div>
 
-          {error && <div className="px-4 pb-2 text-sm text-red-600">{error}</div>}
+          {error && (
+            <div className="px-4 pb-2">
+              <Alert tone="error">{error}</Alert>
+            </div>
+          )}
 
-          <div className="border-t border-gray-200 p-3 flex gap-2">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder="Ask a question... (Enter to send, Shift+Enter for a new line)"
-              rows={2}
-              maxLength={2000}
-              className="flex-1 border border-gray-300 rounded-lg p-2 text-sm"
-            />
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || sending || workspaceId === null}
-              className="bg-blue-600 text-white rounded-lg px-4 text-sm disabled:opacity-50"
-            >
-              Send
-            </button>
+          <div className="rounded-b-xl border-t border-slate-200 bg-white p-3">
+            <div className="flex items-end gap-2">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder="Ask a question…"
+                rows={2}
+                maxLength={2000}
+                className={cx(inputClass, "resize-none")}
+              />
+              <Button onClick={handleSend} disabled={!input.trim()} loading={sending} className="shrink-0">
+                Send
+              </Button>
+            </div>
+            <p className="mt-1.5 px-1 text-[11px] text-slate-400">Enter to send · Shift+Enter for a new line</p>
           </div>
         </section>
       </div>
-    </main>
+    </div>
   );
 }

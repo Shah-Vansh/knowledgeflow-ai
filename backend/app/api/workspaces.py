@@ -125,11 +125,18 @@ def _member_dict(member: WorkspaceMember, user: User) -> dict:
 
 
 def _owner_count(db: Session, workspace_id: int) -> int:
-    return (
-        db.query(func.count(WorkspaceMember.user_id))
+    """
+    Counts owners while LOCKING their membership rows (FOR UPDATE) until the caller
+    commits, so two owners demoting or removing each other at the same moment are
+    serialized and the workspace can't end up with no owner.
+    """
+    owners = (
+        db.query(WorkspaceMember.user_id)
         .filter(WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.role == "owner")
-        .scalar()
+        .with_for_update()
+        .all()
     )
+    return len(owners)
 
 
 @router.get("/{workspace_id}/members")

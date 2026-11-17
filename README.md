@@ -2,9 +2,9 @@
 
 Enterprise Knowledge & Research Copilot — an AI knowledge platform built phase by phase to learn Retrieval-Augmented Generation (RAG) from the basics up to a production-shaped system.
 
-## Current Status: Phases 0–16 complete ✅
+## Current Status: v1.0 — Phases 0–16 complete ✅
 
-Documents (PDF, TXT, scanned pages, images) are ingested into workspaces, chunked, embedded locally and stored in PostgreSQL with pgvector and PostgreSQL full-text search. Questions are answered from those documents only, through hybrid retrieval, a local cross-encoder reranker, optional query transformation, conversation memory, a knowledge graph and a small LangGraph agent. Retrieval quality is measured with a golden-set evaluation and compared across configurations in an experimentation lab. The API has user accounts, per-workspace roles, rate limits and prompt-injection hardening, and can run uploads through a PostgreSQL job queue with a separate worker, structured logs, readiness checks and Prometheus metrics.
+Documents (PDF, TXT, scanned pages, images) are ingested into workspaces, chunked, embedded locally and stored in PostgreSQL with pgvector and PostgreSQL full-text search. Questions are answered from those documents only, through hybrid retrieval, a local cross-encoder reranker, optional query transformation, conversation memory, a knowledge graph and a small LangGraph agent. Retrieval quality is measured with a golden-set evaluation and compared across configurations in an experimentation lab. The API has user accounts, per-workspace roles, token revocation, rate limits and prompt-injection hardening, rejects duplicate uploads, and can run uploads through a PostgreSQL job queue with a separate worker, structured logs, readiness checks and Prometheus metrics. The web app is a single-page workspace with a sidebar, a global workspace switcher and a consistent design system.
 
 ## Tech Stack
 
@@ -99,6 +99,8 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 Restart the API, open http://localhost:3000/login and register. **The first account becomes owner of every existing workspace.** Later accounts need `REGISTRATION_OPEN=true` (the default) and start with no workspaces until an owner adds them on the workspace's members list. Set `REGISTRATION_OPEN=false` once your users exist.
 
+**Sign out everywhere** (in the sidebar, or `POST /auth/logout-all`) revokes every token issued to your account: each token carries a version number that must match the user's current one.
+
 With `ENVIRONMENT=production` the API refuses to start unless auth is on, the secret is long and random, the JWT algorithm is HS256/384/512, CORS lists explicit origins, and every route has an access policy. `/docs` is disabled in production.
 
 ## Running uploads in the background
@@ -115,6 +117,14 @@ venv\Scripts\activate
 python -m app.worker
 ```
 or set `RUN_EMBEDDED_WORKER=true` to run one worker thread inside the API process. Ctrl+C lets the current job finish first.
+
+## Duplicate uploads
+
+Each upload is fingerprinted (SHA-256 of the file bytes). Uploading a file that is already in the workspace returns `409` with the existing document's name and id; the same file may still go into another workspace, and a deleted or failed copy doesn't block a re-upload. Documents uploaded before this existed have no fingerprint; find and remove their duplicates (same workspace, identical extracted text, the oldest copy is kept) with:
+```
+backendenv\Scripts\python scriptsind_duplicates.py           # dry run
+backendenv\Scripts\python scriptsind_duplicates.py --apply   # remove the extra copies
+```
 
 ## Observability
 
@@ -156,23 +166,28 @@ Tests run against `<your database>_test` (created and migrated automatically; `K
 | 14 | Experimentation Lab — compare retrieval and chunking variants on one eval set with paired bootstrap confidence | ✅ |
 | 15 | Security — accounts, viewer/editor/owner roles per workspace, one deny-by-default policy table, rate limits, upload content checks, prompt fencing and answer sanitizing, security headers | ✅ |
 | 16 | Production runtime — PostgreSQL job queue (`SKIP LOCKED`) with retrying workers, query-embedding cache, JSON logs with redaction, readiness checks, Prometheus metrics | ✅ |
+| v1.0 | Product polish — app shell with sidebar navigation and global workspace switcher, design system, dashboard, duplicate-upload detection, "sign out everywhere", locked last-owner check | ✅ |
 
-## Application Pages
+## Application
 
-- `/` — connection status
-- `/login` — sign in / register (only needed when auth is on); the header then shows your email, the active workspace and Log out
-- `/upload` — upload PDF, TXT, PNG or JPG files into a workspace, with chunking options; shows background progress when uploads are queued
-- `/documents` — manage documents (metadata, delete)
-- `/inspector` — how each file was read: digital text, tables, OCR pages, text in images, skipped content
-- `/workspaces` — create and delete workspaces
-- `/query` — one-off questions with page-level sources
-- `/chat` — conversations with follow-up questions
-- `/agent` — the routed agent, showing which tool answered
-- `/graph` — build and explore the knowledge graph, ask graph-augmented questions
-- `/chunking-lab` — compare chunking strategies on the same document
-- `/retrieval-lab` — compare dense, sparse and hybrid retrieval, the reranker and each query transformation
-- `/eval` — golden sets, evaluation runs and per-question results
-- `/experiments` — retrieval/chunking variants compared against a baseline
+One app shell: a sidebar with every page, the **active workspace** switcher (every page works inside it), backend status and the signed-in user. Moving between pages is client-side, so nothing reloads.
+
+| Section | Page | What it does |
+|---|---|---|
+| | `/` Dashboard | Document and conversation counts, recent documents, quick actions |
+| Ask | `/chat` | Conversations with follow-up questions and cited sources |
+| | `/query` Quick answer | One-off questions, optionally limited to chosen documents |
+| | `/agent` | The routed agent, showing which tool answered |
+| | `/graph` Knowledge graph | Build and explore the graph, ask graph-augmented questions |
+| Library | `/upload` | Drag-and-drop upload with background progress |
+| | `/documents` | Documents in the workspace, delete |
+| | `/inspector` | How each file was read: text, tables, OCR pages, text in images |
+| | `/workspaces` | Create, switch and delete workspaces |
+| Labs | `/chunking-lab` | Compare two chunking setups on one document |
+| | `/retrieval-lab` | Dense vs full-text vs hybrid, reranker, query transformations |
+| | `/eval` Evaluation | Golden sets, runs, per-question results |
+| | `/experiments` | Variants compared against a baseline with confidence intervals |
+| | `/login` | Sign in / register (only when auth is on) |
 
 ## Architecture
 
@@ -223,16 +238,15 @@ Every request passes one access dependency driven by a single policy table (`app
 - The sparse retriever is PostgreSQL full-text search with `ts_rank`, **not** BM25 (no IDF weighting or length normalization). Plain sparse search requires all query terms to match.
 - Rerank and RRF scores are relative, so neither is used as a relevance cutoff. The similarity threshold only decides whether to answer at all.
 - Query transformation, conversation rewriting, the agent router and graph extraction each cost LLM calls; with Groq's free tier, calls are scarce.
-- Uploading the same file twice creates duplicate chunks; there is no deduplication. Rechunking discards page numbers (stored text is flat).
+- Duplicate detection compares exact file bytes: a re-saved or re-exported copy of the same document counts as a different file. Rechunking discards page numbers (stored text is flat).
 - Images are searchable only through the text OCR finds in them; there are no image embeddings.
 - With a small golden set most experiment differences are not statistically significant, and the LLM judge is the same model family as the generator, so faithfulness/correctness scores are indicative only.
 
 **Security**
 - Prompt fencing and answer sanitizing *reduce* prompt-injection risk; no prompt format can prove a model won't follow a cleverly written document.
-- Login tokens are kept in browser localStorage, so an XSS bug in the frontend could read them (no cookies means no CSRF exposure). Tokens can't be revoked before they expire (`JWT_EXPIRE_MINUTES`, default 60) except by changing `JWT_SECRET` or deactivating the user.
+- Login tokens are kept in browser localStorage, so an XSS bug in the frontend could read them (no cookies means no CSRF exposure). "Sign out everywhere" revokes all of a user's tokens at once; there is no per-device revocation.
 - Rate limits are counted in memory per process and reset on restart; with several API processes each has its own budget.
 - Workspaces created while auth is off, after users exist, have no owner until one is added in the database.
-- Two owners demoting each other at the same moment is not locked against (the last-owner check isn't serialized).
 - Chunked uploads (no `Content-Length`) skip the early 413, but the upload handler still enforces `MAX_UPLOAD_MB`. UTF-16 `.txt` files are rejected (the text check refuses NUL bytes).
 
 **Runtime**
@@ -259,19 +273,20 @@ knowledgeflow-ai/
 │   │   │                      # experiments, safety, pipeline
 │   │   ├── agent/             # LangGraph workflow, router, tools
 │   │   └── api/               # route handlers
-│   ├── alembic/               # migrations 0001–0010
+│   ├── alembic/               # migrations 0001–0011
 │   └── tests/
 ├── frontend/
 │   └── src/
 │       ├── app/               # Next.js App Router pages
-│       ├── components/        # AuthGate and shared components
+│       ├── components/        # AppShell (sidebar), AuthGate, ui.tsx design system, icons
 │       └── lib/               # API clients
-└── scripts/                   # scan_secrets.py
+├── docs/                      # RESUME.md — project summary, resume bullets, interview notes
+└── scripts/                   # scan_secrets.py, find_duplicates.py
 ```
 
 ## Git Checkpoints
 
-Each verified phase is tagged: `phase-0-foundation`, `phase-2-chunking`, `phase-3-metadata`, `phase-4-retrieval-lab`, `phase-5-hybrid-search`, `phase-6-reranking`, `phase-7-query-transformation`, `phase-8-conversational-rag`, `phase-9-workspaces`, `phase-11-agentic-rag`, `phase-12-graph-rag`.
+Each verified phase is tagged: `phase-0-foundation`, `phase-2-chunking`, `phase-3-metadata`, `phase-4-retrieval-lab`, `phase-5-hybrid-search`, `phase-6-reranking`, `phase-7-query-transformation`, `phase-8-conversational-rag`, `phase-9-workspaces`, `phase-11-agentic-rag`, `phase-12-graph-rag`, `phase-15-security`, `phase-16-production`, `v1.0.0`. Phases 1, 10, 13 and 14 were committed together with neighbouring phases and have no tag of their own.
 
 ## License
 

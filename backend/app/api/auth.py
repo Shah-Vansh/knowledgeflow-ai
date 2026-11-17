@@ -38,7 +38,7 @@ def _user_dict(user: User) -> dict:
 
 def _token_response(user: User) -> dict:
     return {
-        "access_token": create_access_token(user.id, user.email),
+        "access_token": create_access_token(user.id, user.email, version=user.token_version or 0),
         "token_type": "bearer",
         "expires_in": settings.JWT_EXPIRE_MINUTES * 60,
         "user": _user_dict(user),
@@ -129,25 +129,33 @@ def login(request: Credentials, db: Session = Depends(get_db)):
     return _token_response(user)
 
 
-@router.get("/me")
-def me(request: Request, db: Session = Depends(get_db)):
+def _caller(request: Request, db: Session) -> User:
+    """The active user behind the request's token (with auth off, the token is checked here)."""
     user: Optional[AuthUser] = current_user(request)
     user_id = user.id if user else None
+    version = None
     if user_id is None:  # auth off: the access layer didn't run, so check the token here
         token = bearer_token(request)
         if token is None or not settings.JWT_SECRET:
             raise HTTPException(status_code=401, detail="Not authenticated",
                                 headers={"WWW-Authenticate": "Bearer"})
         try:
-            user_id = int(decode_access_token(token)["sub"])
+            claims = decode_access_token(token)
         except TokenError:
             raise HTTPException(status_code=401, detail="Invalid or expired token",
                                 headers={"WWW-Authenticate": "Bearer"})
+        user_id, version = int(claims["sub"]), claims["ver"]
 
     record = db.get(User, user_id)
-    if record is None or not record.is_active:
+    if record is None or not record.is_active or (version is not None and record.token_version != version):
         raise HTTPException(status_code=401, detail="Invalid or expired token",
                             headers={"WWW-Authenticate": "Bearer"})
+    return record
+
+
+@router.get("/me")
+def me(request: Request, db: Session = Depends(get_db)):
+    record = _caller(request, db)
     memberships = (
         db.query(WorkspaceMember.workspace_id, WorkspaceMember.role)
         .filter(WorkspaceMember.user_id == record.id)
@@ -156,3 +164,14 @@ def me(request: Request, db: Session = Depends(get_db)):
     )
     return {**_user_dict(record),
             "workspaces": [{"workspace_id": w, "role": r} for w, r in memberships]}
+
+
+@router.post("/logout-all")
+def logout_everywhere(request: Request, db: Session = Depends(get_db)):
+    """Revokes every token issued so far for the caller (all browsers and devices)."""
+    record = _caller(request, db)
+    db.query(User).filter(User.id == record.id).update(
+        {User.token_version: User.token_version + 1}, synchronize_session=False
+    )
+    db.commit()
+    return {"revoked": True}

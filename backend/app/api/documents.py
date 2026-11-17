@@ -1,3 +1,4 @@
+import hashlib
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -35,6 +36,21 @@ def content_matches_extension(ext: str, head: bytes) -> bool:
     return False
 
 
+def find_duplicate(db: Session, workspace_id: int, sha256: str) -> Optional[Document]:
+    """An active (not deleted, not failed) document in the workspace with the same bytes."""
+    return (
+        db.query(Document)
+        .filter(
+            Document.workspace_id == workspace_id,
+            Document.content_sha256 == sha256,
+            Document.deleted_at.is_(None),
+            Document.status != "failed",
+        )
+        .order_by(Document.id)
+        .first()
+    )
+
+
 class RechunkRequest(BaseModel):
     strategy: str = "fixed_size"
     chunk_size: int = 500
@@ -48,6 +64,7 @@ async def upload_document(
     chunk_size: int = Form(500),
     overlap: int = Form(0),
     workspace_id: int = Form(DEFAULT_WORKSPACE_ID),
+    allow_duplicate: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     ext = file.filename.lower().rsplit(".", 1)[-1] if "." in file.filename else ""
@@ -65,6 +82,7 @@ async def upload_document(
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
             tmp_path = tmp.name
             total = 0
+            digest = hashlib.sha256()
             while True:
                 block = file.file.read(UPLOAD_READ_BYTES)
                 if not block:
@@ -80,9 +98,19 @@ async def upload_document(
                         status_code=413,
                         detail=f"File is too large (limit {settings.MAX_UPLOAD_MB} MB)",
                     )
+                digest.update(block)
                 tmp.write(block)
             if total == 0 and not content_matches_extension(ext, b""):
                 raise HTTPException(status_code=400, detail=f"File content does not match the .{ext} extension")
+
+        sha256 = digest.hexdigest()
+        if not allow_duplicate:
+            existing = find_duplicate(db, workspace_id, sha256)
+            if existing is not None:
+                raise HTTPException(status_code=409, detail=(
+                    f'This file is already in this workspace as "{existing.filename}" '
+                    f"(document #{existing.id}). Delete that copy first if you want to upload it again."
+                ))
 
         if settings.INGEST_ASYNC:
             # Store the bytes with the job and answer at once; a worker ingests it.
@@ -90,6 +118,7 @@ async def upload_document(
             with open(tmp_path, "rb") as stored:
                 file_data = stored.read()
             document = new_document(db, file.filename, workspace_id, status="queued", commit=False)
+            document.content_sha256 = sha256
             job = queue.enqueue(
                 db, "ingest", document.workspace_id,
                 payload={"strategy": strategy, "chunk_size": chunk_size, "overlap": overlap},
@@ -110,6 +139,8 @@ async def upload_document(
             strategy=strategy, chunk_size=chunk_size, overlap=overlap,
             workspace_id=workspace_id,
         )
+        document.content_sha256 = sha256
+        db.commit()
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)

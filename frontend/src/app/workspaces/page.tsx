@@ -1,39 +1,41 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import type { FormEvent } from "react";
+import { createWorkspace, deleteWorkspace } from "@/lib/workspaces";
+import { useWorkspace, WorkspaceWithRole } from "@/lib/workspace-context";
 import {
-  createWorkspace,
-  deleteWorkspace,
-  listWorkspaces,
-  Workspace,
-} from "@/lib/workspaces";
+  Alert,
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  Loading,
+  PageHeader,
+  inputClass,
+} from "@/components/ui";
+import { LayersIcon } from "@/components/icons";
 
 export default function WorkspacesPage() {
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const { workspaces, workspaceId, setWorkspaceId, refresh, loading, error: loadError } = useWorkspace();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
-  const load = () => {
-    listWorkspaces()
-      .then(setWorkspaces)
-      .catch((err) => setError(err instanceof Error ? err.message : "Could not load workspaces"));
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const handleCreate = async () => {
+  const handleCreate = async (e?: FormEvent) => {
+    e?.preventDefault();
     if (!name.trim()) return;
     setBusy(true);
     setError("");
     try {
-      await createWorkspace(name.trim(), description);
+      const created = await createWorkspace(name.trim(), description);
       setName("");
       setDescription("");
-      load();
+      await refresh();
+      setWorkspaceId(created.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create workspace");
     } finally {
@@ -41,85 +43,115 @@ export default function WorkspacesPage() {
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (w: WorkspaceWithRole) => {
+    if (
+      !window.confirm(
+        `Delete workspace "${w.name}" (${w.document_count} document(s))? This cannot be undone.`
+      )
+    )
+      return;
     setError("");
+    setDeletingId(w.id);
     try {
-      await deleteWorkspace(id);
-      load();
+      await deleteWorkspace(w.id);
+      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not delete workspace");
+    } finally {
+      setDeletingId(null);
     }
   };
 
   return (
-    <main className="min-h-screen p-8 flex flex-col items-center">
-      <h1 className="text-2xl font-bold mb-2">Workspaces</h1>
-      <p className="text-sm text-gray-500 mb-6 text-center max-w-lg">
-        Each workspace is an isolated knowledge space. Documents, chats and retrieval never cross
-        workspace boundaries.
-      </p>
+    <div className="space-y-6">
+      <PageHeader
+        title="Workspaces"
+        description="Each workspace is an isolated knowledge space. Documents, chats and retrieval never cross workspace boundaries."
+      />
 
-      <div className="w-full max-w-2xl space-y-4">
-        <div className="border border-gray-300 rounded-lg p-3 bg-white space-y-2">
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="New workspace name (e.g. Engineering)"
-            className="w-full border border-gray-300 rounded p-2 text-sm"
-            maxLength={80}
-          />
-          <input
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Description (optional)"
-            className="w-full border border-gray-300 rounded p-2 text-sm"
-            maxLength={500}
-          />
-          <button
-            onClick={handleCreate}
-            disabled={!name.trim() || busy}
-            className="w-full bg-blue-600 text-white rounded-lg py-2 text-sm disabled:opacity-50"
-          >
-            {busy ? "Creating..." : "Create workspace"}
-          </button>
-        </div>
+      {(error || loadError) && <Alert tone="error">{error || loadError}</Alert>}
 
-        {error && <div className="text-red-600 text-sm">{error}</div>}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card title="New workspace" description="Create a space and switch to it." className="lg:self-start">
+          <form onSubmit={handleCreate} className="space-y-4">
+            <Field label="Name">
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Engineering"
+                className={inputClass}
+                maxLength={80}
+              />
+            </Field>
+            <Field label="Description" hint="Optional">
+              <input
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What lives in this workspace?"
+                className={inputClass}
+                maxLength={500}
+              />
+            </Field>
+            <Button type="submit" className="w-full" disabled={!name.trim()} loading={busy}>
+              {busy ? "Creating..." : "Create workspace"}
+            </Button>
+          </form>
+        </Card>
 
-        {workspaces.map((w) => (
-          <div
-            key={w.id}
-            className="border border-gray-300 rounded-lg p-3 bg-white flex items-center justify-between"
-          >
-            <div className="text-sm">
-              <p className="font-medium">
-                #{w.id} — {w.name}
-              </p>
-              <p className="text-gray-500">
-                {w.document_count} document(s)
-                {w.description ? ` · ${w.description}` : ""}
-              </p>
-            </div>
-            {w.id !== 1 && (
-              <button
-                onClick={() => handleDelete(w.id)}
-                className="text-red-600 border border-red-300 rounded px-3 py-1 text-sm"
-              >
-                Delete
-              </button>
-            )}
-          </div>
-        ))}
-
-        <div className="flex justify-between text-sm pt-2">
-          <a href="/upload" className="text-blue-600 underline">
-            ← Upload
-          </a>
-          <a href="/chat" className="text-blue-600 underline">
-            Chat →
-          </a>
+        <div className="lg:col-span-2">
+          {loading ? (
+            <Loading label="Loading workspaces…" />
+          ) : workspaces.length === 0 ? (
+            <EmptyState
+              icon={<LayersIcon className="h-8 w-8" />}
+              title="No workspaces"
+              description="Create your first workspace with the form."
+            />
+          ) : (
+            <Card title="All workspaces" padded={false}>
+              <ul className="divide-y divide-slate-100">
+                {workspaces.map((w) => {
+                  const active = w.id === workspaceId;
+                  return (
+                    <li key={w.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-medium text-slate-900 break-all">{w.name}</p>
+                          <span className="text-xs text-slate-400">#{w.id}</span>
+                          {active && <Badge tone="brand">Active</Badge>}
+                          {w.role && <Badge>{w.role}</Badge>}
+                        </div>
+                        {w.description && <p className="mt-0.5 text-sm text-slate-600">{w.description}</p>}
+                        <p className="mt-0.5 text-xs text-slate-500">{w.document_count} document(s)</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={active}
+                          onClick={() => setWorkspaceId(w.id)}
+                        >
+                          {active ? "Current" : "Switch to"}
+                        </Button>
+                        {w.id !== 1 && (
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            loading={deletingId === w.id}
+                            onClick={() => handleDelete(w)}
+                          >
+                            Delete
+                          </Button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </Card>
+          )}
         </div>
       </div>
-    </main>
+    </div>
   );
 }

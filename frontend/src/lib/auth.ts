@@ -87,8 +87,7 @@ export function clearSession() {
 }
 
 // ---------------------------------------------------------------- active workspace
-// Pages written before Phase 15 sometimes ask for "all workspaces". With auth on
-// the backend requires a workspace, so those calls use the one picked in the header.
+// The active workspace is chosen once, in the sidebar, and shared by every page.
 export function getActiveWorkspaceId(): number | null {
   const raw = storage()?.getItem(WORKSPACE_KEY);
   const id = raw ? Number(raw) : NaN;
@@ -99,9 +98,11 @@ export function setActiveWorkspaceId(id: number) {
   storage()?.setItem(WORKSPACE_KEY, String(id));
 }
 
-/** undefined with auth off (keeps "all workspaces"); the active workspace with auth on. */
+/**
+ * The workspace picked in the sidebar switcher. Every page works inside it, with
+ * auth on or off, so calls that don't name a workspace use this one (1 = General).
+ */
 export function workspaceForUnscopedCall(): number | undefined {
-  if (!authRequiredFlag) return undefined;
   return getActiveWorkspaceId() ?? 1;
 }
 
@@ -141,6 +142,15 @@ export async function me(): Promise<AuthUser> {
 export function logout() {
   clearSession();
   if (typeof window !== "undefined") window.location.href = "/login";
+}
+
+/** Revokes every token for this account (all browsers and devices), then signs out here. */
+export async function logoutEverywhere() {
+  try {
+    await fetch(`${API_BASE_URL}/auth/logout-all`, { method: "POST" });
+  } finally {
+    logout();
+  }
 }
 
 /** Only same-site relative paths, so ?next= can't send the user to another site. */

@@ -99,7 +99,7 @@ def validate_password(password: str, email: str = "") -> None:
 
 
 # --------------------------------------------------------------------- tokens
-def create_access_token(user_id: int, email: str, now: datetime = None) -> str:
+def create_access_token(user_id: int, email: str, now: datetime = None, version: int = 0) -> str:
     if not settings.JWT_SECRET:
         raise TokenError("JWT_SECRET is not configured")
     now = now or datetime.now(timezone.utc)
@@ -108,6 +108,7 @@ def create_access_token(user_id: int, email: str, now: datetime = None) -> str:
         "email": email,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)).timestamp()),
+        "ver": int(version),  # must equal users.token_version; bumping it revokes old tokens
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
@@ -130,6 +131,10 @@ def decode_access_token(token: str) -> dict:
     sub = claims.get("sub")
     if not isinstance(sub, str) or not sub.isdigit():
         raise TokenError("Invalid subject")
+    version = claims.get("ver", 0)  # tokens issued before revocation existed count as 0
+    if isinstance(version, bool) or not isinstance(version, int) or version < 0:
+        raise TokenError("Invalid token version")
+    claims["ver"] = version
     return claims
 
 

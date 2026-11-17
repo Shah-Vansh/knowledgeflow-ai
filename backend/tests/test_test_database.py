@@ -18,7 +18,7 @@ def test_connected_database_is_the_test_database():
 def test_test_database_is_migrated_to_head():
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert version == "0010"
+    assert version == "0011"
 
 
 def test_auth_is_off_by_default_in_tests():

@@ -40,6 +40,7 @@ def _requests(w):
         ("POST", "/auth/login"): lambda a: ("POST", "/auth/login", {"json": {
             "email": owner_email, "password": PASSWORD}}),
         ("GET", "/auth/me"): lambda a: ("GET", "/auth/me", {}),
+        ("POST", "/auth/logout-all"): lambda a: ("POST", "/auth/logout-all", {}),
         ("GET", "/workspaces"): lambda a: ("GET", "/workspaces", {}),
         ("POST", "/workspaces"): lambda a: ("POST", "/workspaces", {"json": {"name": f"{w.prefix}-new-{a}"}}),
         ("DELETE", "/workspaces/{workspace_id}"): lambda a: ("DELETE", f"/workspaces/{A}", {}),

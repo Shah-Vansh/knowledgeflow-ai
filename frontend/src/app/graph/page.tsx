@@ -1,9 +1,23 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { listWorkspaces, Workspace } from "@/lib/workspaces";
+import { useWorkspace } from "@/lib/workspace-context";
 import { DocumentSummary, listDocuments } from "@/lib/documents";
 import { askGraph, buildGraph, BuildReport, getGraph, GraphAnswer, GraphView } from "@/lib/graph";
+import {
+  Alert,
+  Badge,
+  Button,
+  ButtonLink,
+  Card,
+  EmptyState,
+  Field,
+  Loading,
+  PageHeader,
+  Stat,
+  inputClass,
+} from "@/components/ui";
+import { GraphIcon } from "@/components/icons";
 
 const TYPE_COLORS: Record<string, string> = {
   PERSON: "#f59e0b",
@@ -44,16 +58,18 @@ function GraphDrawing({ graph, highlight }: { graph: GraphView; highlight: Set<s
 
   if (nodes.length === 0) {
     return (
-      <p className="text-sm text-gray-500">
-        No graph yet. Build one from a document below — it is never built automatically.
-      </p>
+      <EmptyState
+        icon={<GraphIcon className="h-8 w-8" />}
+        title="No graph yet"
+        description="Build one from a document below — it is never built automatically."
+      />
     );
   }
 
   return (
     <svg
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className="w-full border border-gray-200 rounded-lg bg-white"
+      className="w-full rounded-lg bg-white"
       role="img"
       aria-label="Knowledge graph"
     >
@@ -108,9 +124,9 @@ function GraphDrawing({ graph, highlight }: { graph: GraphView; highlight: Set<s
   );
 }
 
+
 export default function GraphPage() {
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [workspaceId, setWorkspaceId] = useState<number | null>(null);
+  const { workspaceId, workspace } = useWorkspace();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [graph, setGraph] = useState<GraphView | null>(null);
   const [error, setError] = useState("");
@@ -125,22 +141,14 @@ export default function GraphPage() {
   const [asking, setAsking] = useState(false);
   const [answer, setAnswer] = useState<GraphAnswer | null>(null);
 
-  useEffect(() => {
-    listWorkspaces()
-      .then((list) => {
-        setWorkspaces(list);
-        if (list.length > 0) setWorkspaceId(list[0].id);
-      })
-      .catch(() => setError("Could not load workspaces"));
-  }, []);
-
   const refresh = (id: number) => {
     getGraph(id).then(setGraph).catch((err) => setError(err instanceof Error ? err.message : "Could not load the graph"));
     listDocuments("processed", id).then(setDocuments).catch(() => {});
   };
 
   useEffect(() => {
-    if (workspaceId === null) return;
+    setGraph(null);
+    setDocuments([]);
     setReport(null);
     setAnswer(null);
     setError("");
@@ -150,7 +158,6 @@ export default function GraphPage() {
   const maxCalls = Math.ceil(maxChunks / groupSize);
 
   const handleBuild = async (documentId: number) => {
-    if (workspaceId === null) return;
     setBuildingId(documentId);
     setError("");
     setReport(null);
@@ -165,7 +172,7 @@ export default function GraphPage() {
   };
 
   const handleAsk = async () => {
-    if (!question.trim() || workspaceId === null) return;
+    if (!question.trim()) return;
     setAsking(true);
     setError("");
     setAnswer(null);
@@ -182,196 +189,250 @@ export default function GraphPage() {
   const nodeNames = new Map((graph?.nodes ?? []).map((n) => [n.id, n.name]));
 
   return (
-    <main className="min-h-screen p-8 flex flex-col items-center">
-      <h1 className="text-2xl font-bold mb-2">Knowledge Graph</h1>
-      <p className="text-sm text-gray-500 mb-6 text-center max-w-xl">
-        Entities and relationships extracted from your documents. Every relationship is stored with
-        the exact passage it came from, and nothing is kept unless its names appear in that text.
-      </p>
+    <div className="space-y-6">
+      <PageHeader
+        title="Knowledge graph"
+        description={
+          <>
+            Entities and relationships extracted from the documents in {workspace?.name ?? "this workspace"}. Every
+            relationship is stored with the exact passage it came from, and nothing is kept unless its names appear in
+            that text.
+          </>
+        }
+      />
 
-      <div className="w-full max-w-4xl space-y-5">
-        <label className="block text-sm">
-          Workspace
-          <select
-            value={workspaceId ?? ""}
-            onChange={(e) => setWorkspaceId(Number(e.target.value))}
-            className="block w-full border border-gray-300 rounded p-2 mt-1 bg-white"
-          >
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-          </select>
-        </label>
+      {error && <Alert tone="error">{error}</Alert>}
 
-        {error && <div className="text-red-600 text-sm">{error}</div>}
+      {graph ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Stat label="Entities" value={graph.totals.entities} />
+          <Stat label="Relationships" value={graph.totals.relationships} />
+          <Stat label="Documents with a graph" value={graph.totals.documents_with_graph} />
+        </div>
+      ) : (
+        !error && <Loading label="Loading graph…" />
+      )}
 
-        {graph && (
-          <p className="text-sm text-gray-600">
-            {graph.totals.entities} entities · {graph.totals.relationships} relationships ·{" "}
-            {graph.totals.documents_with_graph} document(s) with a graph
-            {graph.nodes.length > MAX_DRAWN_NODES
-              ? ` · drawing the ${MAX_DRAWN_NODES} most connected`
-              : ""}
-          </p>
-        )}
+      {graph && (
+        <Card
+          title="Graph"
+          description={
+            graph.nodes.length > MAX_DRAWN_NODES
+              ? `Drawing the ${MAX_DRAWN_NODES} most connected entities.`
+              : "Node size reflects how connected an entity is; entities matched by your question are outlined."
+          }
+        >
+          <GraphDrawing graph={graph} highlight={highlight} />
+          {graph.nodes.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1.5 border-t border-slate-100 pt-3">
+              {Object.entries(TYPE_COLORS).map(([type, color]) => (
+                <span key={type} className="flex items-center gap-1.5 text-xs text-slate-500">
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+                  {type}
+                </span>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
-        {graph && <GraphDrawing graph={graph} highlight={highlight} />}
-
-        <section className="border border-gray-300 rounded-lg bg-white p-4 space-y-3">
-          <h2 className="font-semibold text-sm">Ask the graph</h2>
-          <textarea
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="e.g. How is <entity A> related to <entity B>?"
-            rows={2}
-            maxLength={1000}
-            className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-          />
-          <div className="flex items-center gap-3 text-sm">
-            <label>
-              Hops:{" "}
-              <select
-                value={hops}
-                onChange={(e) => setHops(Number(e.target.value))}
-                className="border border-gray-300 rounded p-1"
-              >
-                {[1, 2, 3].map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              onClick={handleAsk}
-              disabled={!question.trim() || asking || workspaceId === null}
-              className="ml-auto bg-blue-600 text-white rounded-lg px-4 py-1.5 text-sm disabled:opacity-50"
-            >
-              {asking ? "Thinking..." : "Ask"}
-            </button>
-          </div>
-
-          {answer && (
-            <div className="space-y-2 text-sm">
-              <p className="whitespace-pre-wrap">{answer.answer}</p>
-              <p className="text-xs text-gray-500">
-                Mode: {answer.mode}
-                {answer.graph.matched_entities.length > 0
-                  ? ` · matched: ${answer.graph.matched_entities.join(", ")}`
-                  : " · no known entity was named, so this used text retrieval only"}
-              </p>
-              {answer.graph.facts.length > 0 && (
-                <ul className="list-disc list-inside text-xs text-gray-600">
-                  {answer.graph.facts.map((f, i) => (
-                    <li key={i}>
-                      {f.source} —[{f.relation}]→ {f.target}{" "}
-                      <span className="text-gray-400">
-                        ({f.filename}
-                        {f.page_number !== null ? `, p.${f.page_number}` : ""}, hop {f.hop})
-                      </span>
-                    </li>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <Card title="Ask the graph" description="Answers using facts reachable from the entities you name.">
+          <div className="space-y-4">
+            <textarea
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              placeholder="e.g. How is <entity A> related to <entity B>?"
+              rows={2}
+              maxLength={1000}
+              aria-label="Question for the graph"
+              className={inputClass}
+            />
+            <div className="flex items-end gap-3">
+              <Field label="Hops" className="w-24">
+                <select value={hops} onChange={(e) => setHops(Number(e.target.value))} className={inputClass}>
+                  {[1, 2, 3].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
                   ))}
-                </ul>
-              )}
+                </select>
+              </Field>
+              <Button onClick={handleAsk} disabled={!question.trim()} loading={asking} className="ml-auto">
+                {asking ? "Thinking…" : "Ask"}
+              </Button>
             </div>
-          )}
-        </section>
 
-        <section className="border border-gray-300 rounded-lg bg-white p-4 space-y-3">
-          <h2 className="font-semibold text-sm">Build a graph from a document</h2>
-          <p className="text-xs text-gray-500">
-            This uses LLM calls (about one per {groupSize} chunks) and never runs automatically.
-            Rebuilding replaces that document&apos;s previous graph.
-          </p>
-          <div className="flex gap-4 text-sm">
-            <label>
-              Max chunks{" "}
-              <input
-                type="number"
-                min={1}
-                max={200}
-                value={maxChunks}
-                onChange={(e) => setMaxChunks(Number(e.target.value))}
-                className="w-20 border border-gray-300 rounded p-1"
-              />
-            </label>
-            <label>
-              Chunks per call{" "}
-              <input
-                type="number"
-                min={1}
-                max={8}
-                value={groupSize}
-                onChange={(e) => setGroupSize(Number(e.target.value))}
-                className="w-16 border border-gray-300 rounded p-1"
-              />
-            </label>
+            {answer && (
+              <div className="space-y-3 border-t border-slate-100 pt-4">
+                <p className="whitespace-pre-wrap text-sm leading-6 text-slate-900">{answer.answer}</p>
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                  <Badge>mode: {answer.mode}</Badge>
+                  {answer.graph.matched_entities.length > 0 ? (
+                    <>
+                      <span>matched</span>
+                      {answer.graph.matched_entities.map((name) => (
+                        <Badge key={name} tone="brand">
+                          {name}
+                        </Badge>
+                      ))}
+                    </>
+                  ) : (
+                    <span>no known entity was named, so this used text retrieval only</span>
+                  )}
+                </div>
+                {answer.graph.facts.length > 0 && (
+                  <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200 text-xs">
+                    {answer.graph.facts.map((f, i) => (
+                      <li key={i} className="flex flex-wrap items-center gap-1.5 px-3 py-2">
+                        <span className="font-medium text-slate-900">{f.source}</span>
+                        <Badge tone="brand">{f.relation}</Badge>
+                        <span className="font-medium text-slate-900">{f.target}</span>
+                        <span className="ml-auto text-slate-400">
+                          {f.filename}
+                          {f.page_number !== null ? `, p.${f.page_number}` : ""} · hop {f.hop}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
+        </Card>
 
-          {documents.length === 0 && (
-            <p className="text-sm text-gray-500">No processed documents in this workspace.</p>
-          )}
-          {documents.map((d) => (
-            <div key={d.id} className="flex items-center justify-between border border-gray-200 rounded p-2 text-sm">
-              <span>
-                #{d.id} — {d.filename}
-              </span>
-              <button
-                onClick={() => handleBuild(d.id)}
-                disabled={buildingId !== null}
-                className="border border-blue-600 text-blue-600 rounded px-3 py-1 text-xs disabled:opacity-50"
-              >
-                {buildingId === d.id ? "Building..." : `Build graph (≤ ${maxCalls} calls)`}
-              </button>
+        <Card title="Build a graph from a document" description="Extract entities and relationships from one processed document.">
+          <div className="space-y-4">
+            <Alert tone="warning">
+              This uses LLM calls (about one per {groupSize} chunks) and never runs automatically. Rebuilding replaces
+              that document&apos;s previous graph.
+            </Alert>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Max chunks">
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={maxChunks}
+                  onChange={(e) => setMaxChunks(Number(e.target.value))}
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Chunks per call">
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={groupSize}
+                  onChange={(e) => setGroupSize(Number(e.target.value))}
+                  className={inputClass}
+                />
+              </Field>
             </div>
-          ))}
 
-          {report && (
-            <div className="text-xs bg-green-50 border border-green-200 rounded p-2 space-y-0.5">
-              <p className="font-medium">Built from document #{report.document_id}</p>
-              <p>
-                {report.entities} entities, {report.relationships} relationships from{" "}
-                {report.chunks_processed}/{report.chunks_total} chunks in {report.llm_calls} LLM call(s)
-                ({Math.round(report.elapsed_ms / 100) / 10}s)
-              </p>
-              <p>
-                Rejected for not matching the text: {report.dropped_entities} entities,{" "}
-                {report.dropped_relations} relationships
-                {report.groups_failed > 0 ? ` · ${report.groups_failed} call(s) failed and were skipped` : ""}
-                {report.truncated ? " · only the first chunks were processed" : ""}
-              </p>
-            </div>
-          )}
-        </section>
+            {documents.length === 0 ? (
+              <EmptyState
+                title="No processed documents"
+                description="Upload a document to this workspace and wait for it to finish processing."
+                action={
+                  <ButtonLink href="/upload" size="sm">
+                    Upload a document
+                  </ButtonLink>
+                }
+              />
+            ) : (
+              <ul className="scrollbar-thin max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+                {documents.map((d) => (
+                  <li key={d.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="font-mono text-xs text-slate-400">#{d.id}</span>
+                      <span className="truncate text-slate-800" title={d.filename}>
+                        {d.filename}
+                      </span>
+                    </span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => handleBuild(d.id)}
+                      disabled={buildingId !== null}
+                      loading={buildingId === d.id}
+                      className="shrink-0"
+                    >
+                      {buildingId === d.id ? "Building…" : `Build graph (≤ ${maxCalls} calls)`}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
 
-        {graph && graph.edges.length > 0 && (
-          <section className="border border-gray-300 rounded-lg bg-white p-4">
-            <h2 className="font-semibold text-sm mb-2">Relationships</h2>
-            <ul className="text-xs text-gray-700 space-y-1 max-h-72 overflow-y-auto">
-              {graph.edges.map((edge) => (
-                <li key={edge.id}>
-                  {nodeNames.get(edge.source)} —[{edge.relation}]→ {nodeNames.get(edge.target)}{" "}
-                  <span className="text-gray-400">
-                    ({edge.filename ?? "?"}
-                    {edge.page_number !== null ? `, p.${edge.page_number}` : ""})
+            {report && (
+              <Alert tone="success" title={`Built from document #${report.document_id}`}>
+                <p>
+                  {report.entities} entities, {report.relationships} relationships from {report.chunks_processed}/
+                  {report.chunks_total} chunks in {report.llm_calls} LLM call(s) (
+                  {Math.round(report.elapsed_ms / 100) / 10}s)
+                </p>
+                <p>
+                  Rejected for not matching the text: {report.dropped_entities} entities, {report.dropped_relations}{" "}
+                  relationships
+                  {report.groups_failed > 0 ? ` · ${report.groups_failed} call(s) failed and were skipped` : ""}
+                  {report.truncated ? " · only the first chunks were processed" : ""}
+                </p>
+              </Alert>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {graph && graph.nodes.length > 0 && (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <Card title="Entities" description={`${graph.nodes.length} shown, most connected first.`} padded={false}>
+            <ul className="scrollbar-thin max-h-80 divide-y divide-slate-100 overflow-y-auto">
+              {graph.nodes.map((node) => (
+                <li key={node.id} className="flex items-center justify-between gap-2 px-5 py-2 text-sm">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: TYPE_COLORS[node.type] ?? TYPE_COLORS.OTHER }}
+                    />
+                    <span className="truncate text-slate-800" title={node.name}>
+                      {node.name}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs text-slate-400">
+                    {node.type} · {node.degree}
                   </span>
                 </li>
               ))}
             </ul>
-          </section>
-        )}
+          </Card>
 
-        <div className="flex justify-between text-sm pt-2">
-          <a href="/agent" className="text-blue-600 underline">
-            ← Agent
-          </a>
-          <a href="/chat" className="text-blue-600 underline">
-            Chat →
-          </a>
+          <Card
+            className="lg:col-span-2"
+            title="Relationships"
+            description={`${graph.edges.length} shown, each with the document it came from.`}
+            padded={false}
+          >
+            {graph.edges.length === 0 ? (
+              <p className="px-5 py-6 text-sm text-slate-500">No relationships between the shown entities.</p>
+            ) : (
+              <ul className="scrollbar-thin max-h-80 divide-y divide-slate-100 overflow-y-auto">
+                {graph.edges.map((edge) => (
+                  <li key={edge.id} className="flex flex-wrap items-center gap-1.5 px-5 py-2 text-xs">
+                    <span className="font-medium text-slate-900">{nodeNames.get(edge.source)}</span>
+                    <Badge tone="brand">{edge.relation}</Badge>
+                    <span className="font-medium text-slate-900">{nodeNames.get(edge.target)}</span>
+                    <span className="ml-auto text-slate-400">
+                      {edge.filename ?? "?"}
+                      {edge.page_number !== null ? `, p.${edge.page_number}` : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
         </div>
-      </div>
-    </main>
+      )}
+    </div>
   );
 }

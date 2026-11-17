@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listWorkspaces, Workspace } from "@/lib/workspaces";
+import { useWorkspace } from "@/lib/workspace-context";
 import {
   addQuestion,
   createRun,
@@ -20,17 +20,48 @@ import {
   listSets,
   RunMetrics,
 } from "@/lib/eval";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  cx,
+  EmptyState,
+  Field,
+  inputClass,
+  PageHeader,
+  Segmented,
+  Stat,
+  StatusBadge,
+} from "@/components/ui";
 
 const TRANSFORMS = ["rewrite", "expand", "multi_query", "hyde"];
+const CHECKBOX = "h-4 w-4 rounded border-slate-300 text-brand-600";
+const TH = "px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-500";
+const TD = "px-3 py-2";
 
 function metric(metrics: RunMetrics | null, key: string): string {
   const value = metrics ? metrics[key] : undefined;
   return typeof value === "number" ? value.toFixed(3) : "—";
 }
 
+/** Group "name@k" metrics into rows (metric name) by columns (k). */
+function kTable(metrics: RunMetrics) {
+  const rows = new Map<string, Map<number, number>>();
+  const ks = new Set<number>();
+  for (const [key, value] of Object.entries(metrics)) {
+    const match = /^(.+)@(\d+)$/.exec(key);
+    if (!match || typeof value !== "number") continue;
+    const k = Number(match[2]);
+    ks.add(k);
+    if (!rows.has(match[1])) rows.set(match[1], new Map());
+    rows.get(match[1])!.set(k, value);
+  }
+  return { rows: Array.from(rows.entries()), ks: Array.from(ks).sort((a, b) => a - b) };
+}
+
 export default function EvalPage() {
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [workspaceId, setWorkspaceId] = useState<number | null>(null);
+  const { workspaceId, workspace } = useWorkspace();
   const [sets, setSets] = useState<EvalSetSummary[]>([]);
   const [setId, setSetId] = useState<number | null>(null);
   const [detail, setDetail] = useState<EvalSetDetail | null>(null);
@@ -39,6 +70,7 @@ export default function EvalPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [action, setAction] = useState("");
 
   const [newSetName, setNewSetName] = useState("");
   const [question, setQuestion] = useState("");
@@ -55,20 +87,13 @@ export default function EvalPage() {
 
   const fail = (err: unknown) => setError(err instanceof Error ? err.message : "Something went wrong");
 
-  useEffect(() => {
-    listWorkspaces()
-      .then((list) => {
-        setWorkspaces(list);
-        if (list.length > 0) setWorkspaceId(list[0].id);
-      })
-      .catch(fail);
-  }, []);
-
   const refreshSets = (id: number) => listSets(id).then(setSets).catch(fail);
 
   useEffect(() => {
-    if (workspaceId === null) return;
+    setSets([]);
     setSetId(null);
+    setMessage("");
+    setError("");
     refreshSets(workspaceId);
   }, [workspaceId]);
 
@@ -84,22 +109,24 @@ export default function EvalPage() {
     if (setId !== null) refreshSet(setId);
   }, [setId]);
 
-  const guarded = async (action: () => Promise<void>) => {
+  const guarded = async (name: string, run: () => Promise<void>) => {
     setBusy(true);
+    setAction(name);
     setError("");
     setMessage("");
     try {
-      await action();
+      await run();
     } catch (err) {
       fail(err);
     } finally {
       setBusy(false);
+      setAction("");
     }
   };
 
   const handleCreateSet = () =>
-    guarded(async () => {
-      if (workspaceId === null || !newSetName.trim()) return;
+    guarded("create", async () => {
+      if (!newSetName.trim()) return;
       const created = await createSet(workspaceId, newSetName.trim());
       setNewSetName("");
       await refreshSets(workspaceId);
@@ -107,7 +134,7 @@ export default function EvalPage() {
     });
 
   const handleAddQuestion = () =>
-    guarded(async () => {
+    guarded("add", async () => {
       if (setId === null) return;
       await addQuestion(setId, {
         question: question.trim(),
@@ -122,11 +149,11 @@ export default function EvalPage() {
       setFilename("");
       setShouldRefuse(false);
       refreshSet(setId);
-      if (workspaceId !== null) refreshSets(workspaceId);
+      refreshSets(workspaceId);
     });
 
   const handleDraft = () =>
-    guarded(async () => {
+    guarded("draft", async () => {
       if (setId === null) return;
       const report = await generateQuestions(setId, draftCount);
       setMessage(
@@ -134,290 +161,474 @@ export default function EvalPage() {
           `${report.llm_calls} LLM call(s)). Review them: generated questions are easier than real ones.`
       );
       refreshSet(setId);
-      if (workspaceId !== null) refreshSets(workspaceId);
+      refreshSets(workspaceId);
     });
 
   const questionCount = detail?.questions.length ?? 0;
   const estimatedCalls = generate ? questionCount * 2 + (transforms.length > 0 ? questionCount : 0) : transforms.length > 0 ? questionCount : 0;
 
   const handleRun = () =>
-    guarded(async () => {
+    guarded("run", async () => {
       if (setId === null) return;
       const run = await createRun(setId, { mode, rerank, transforms, generate });
       setMessage(`Run #${run.id} finished: ${run.status} in ${(run.elapsed_ms / 1000).toFixed(1)}s, ${run.llm_calls} LLM call(s).`);
       refreshSet(setId);
     });
 
+  const changeMode = (value: string) => {
+    setMode(value);
+    if (value !== "hybrid") {
+      setRerank(false);
+      setTransforms([]);
+      setGenerate(false);
+    }
+  };
+
   const toggleTransform = (name: string) =>
     setTransforms((current) => (current.includes(name) ? current.filter((t) => t !== name) : [...current, name]));
 
   const hybridOnly = mode !== "hybrid";
+  const openK = openRun?.metrics ? kTable(openRun.metrics) : null;
 
   return (
-    <main className="min-h-screen p-8 flex flex-col items-center">
-      <h1 className="text-2xl font-bold mb-2">Evaluation</h1>
-      <p className="text-sm text-gray-500 mb-6 text-center max-w-2xl">
-        A golden set is a list of questions plus the exact text that answers each one. A retrieved chunk
-        counts as relevant when it contains that text, so the same set can score any retrieval setting
-        and any chunking.
-      </p>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Lab"
+        title="Evaluation"
+        description="A golden set is a list of questions plus the exact text that answers each one. A retrieved chunk counts as relevant when it contains that text, so the same set can score any retrieval setting and any chunking."
+      />
 
-      <div className="w-full max-w-5xl space-y-5">
-        {error && <div className="text-red-600 text-sm">{error}</div>}
-        {message && <div className="text-green-700 text-sm bg-green-50 border border-green-200 rounded p-2">{message}</div>}
+      {error && <Alert tone="error">{error}</Alert>}
+      {message && <Alert tone="success">{message}</Alert>}
 
-        <section className="border border-gray-300 rounded-lg bg-white p-4 space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <label className="block text-sm">
-              Workspace
-              <select
-                value={workspaceId ?? ""}
-                onChange={(e) => setWorkspaceId(Number(e.target.value))}
-                className="block w-full border border-gray-300 rounded p-2 mt-1"
-              >
-                {workspaces.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block text-sm">
-              Golden set
-              <select
-                value={setId ?? ""}
-                onChange={(e) => setSetId(e.target.value ? Number(e.target.value) : null)}
-                className="block w-full border border-gray-300 rounded p-2 mt-1"
-              >
-                <option value="">— choose —</option>
-                {sets.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.question_count})
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="flex gap-2">
-            <input
-              value={newSetName}
-              onChange={(e) => setNewSetName(e.target.value)}
-              placeholder="New golden set name"
-              className="flex-1 border border-gray-300 rounded p-2 text-sm"
-            />
-            <button
-              onClick={handleCreateSet}
-              disabled={busy || !newSetName.trim()}
-              className="bg-blue-600 text-white rounded px-4 text-sm disabled:opacity-50"
+      <Card
+        title="Golden set"
+        description={workspace?.name ? `Sets in ${workspace.name}` : undefined}
+        actions={
+          setId !== null && (
+            <Button
+              variant="danger"
+              size="sm"
+              loading={action === "delete-set"}
+              disabled={busy}
+              onClick={() =>
+                guarded("delete-set", async () => {
+                  await deleteSet(setId);
+                  setSetId(null);
+                  await refreshSets(workspaceId);
+                })
+              }
             >
-              Create
-            </button>
-            {setId !== null && (
-              <button
-                onClick={() =>
-                  guarded(async () => {
-                    await deleteSet(setId);
-                    setSetId(null);
-                    if (workspaceId !== null) await refreshSets(workspaceId);
-                  })
-                }
-                className="border border-red-300 text-red-600 rounded px-3 text-sm"
-              >
-                Delete set
-              </button>
-            )}
-          </div>
-        </section>
+              Delete set
+            </Button>
+          )
+        }
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="Golden set">
+            <select
+              value={setId ?? ""}
+              onChange={(e) => setSetId(e.target.value ? Number(e.target.value) : null)}
+              className={inputClass}
+            >
+              <option value="">— choose —</option>
+              {sets.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.question_count})
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Create a new set">
+            <div className="flex gap-2">
+              <input
+                value={newSetName}
+                onChange={(e) => setNewSetName(e.target.value)}
+                placeholder="New golden set name"
+                className={inputClass}
+              />
+              <Button onClick={handleCreateSet} disabled={busy || !newSetName.trim()} loading={action === "create"}>
+                Create
+              </Button>
+            </div>
+          </Field>
+        </div>
+      </Card>
 
-        {detail && (
-          <>
-            <section className="border border-gray-300 rounded-lg bg-white p-4 space-y-3">
-              <h2 className="font-semibold text-sm">Questions ({detail.questions.length})</h2>
-              {detail.questions.length === 0 && <p className="text-xs text-gray-500">No questions yet.</p>}
-              <ul className="space-y-2">
-                {detail.questions.map((q) => (
-                  <li key={q.id} className="text-xs border border-gray-200 rounded p-2 flex justify-between gap-3">
-                    <div className="space-y-0.5">
-                      <p className="font-medium text-sm">
-                        {q.question}{" "}
-                        {q.should_refuse && <span className="text-amber-700 text-xs">(should be refused)</span>}
-                        {q.source === "generated" && <span className="text-gray-400 text-xs"> · drafted</span>}
-                      </p>
-                      {q.evidence.map((e, i) => (
-                        <p key={i} className="text-gray-600">
-                          evidence: “{e}”
-                        </p>
-                      ))}
-                      {q.filename && <p className="text-gray-500">file: {q.filename}</p>}
-                      {q.reference_answer && <p className="text-gray-500">reference: {q.reference_answer}</p>}
-                    </div>
-                    <button
-                      onClick={() => guarded(async () => { await deleteQuestion(q.id); refreshSet(detail.id); })}
-                      className="text-red-600 self-start"
-                    >
-                      ✕
-                    </button>
-                  </li>
-                ))}
-              </ul>
+      {!detail && (
+        <EmptyState
+          title={sets.length === 0 ? "No golden sets in this workspace" : "No golden set selected"}
+          description={
+            sets.length === 0
+              ? "Create a golden set above, then add questions or draft them from your documents."
+              : "Choose a golden set above to edit its questions and run evaluations."
+          }
+        />
+      )}
 
-              <div className="border-t border-gray-200 pt-3 space-y-2">
-                <h3 className="text-sm font-medium">Add a question</h3>
-                <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Question"
-                  className="w-full border border-gray-300 rounded p-2 text-sm" />
-                <textarea value={evidence} onChange={(e) => setEvidence(e.target.value)} rows={2}
-                  placeholder="Evidence: a short exact phrase from the document that answers it (one per line)"
-                  className="w-full border border-gray-300 rounded p-2 text-sm" />
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Reference answer (optional, used to grade answers)"
-                    className="border border-gray-300 rounded p-2 text-sm" />
-                  <input value={filename} onChange={(e) => setFilename(e.target.value)} placeholder="Only count this file (optional)"
-                    className="border border-gray-300 rounded p-2 text-sm" />
+      {detail && (
+        <>
+          <div className="grid gap-6 lg:grid-cols-3">
+            <Card title={`Questions (${detail.questions.length})`} className="lg:col-span-2" padded={false}>
+              {detail.questions.length === 0 ? (
+                <div className="p-5">
+                  <EmptyState title="No questions yet." description="Add one on the right, or draft questions from this workspace's text." />
                 </div>
-                <label className="text-xs flex items-center gap-2">
-                  <input type="checkbox" checked={shouldRefuse} onChange={(e) => setShouldRefuse(e.target.checked)} />
-                  The documents do NOT answer this (the system should refuse; leave evidence empty)
-                </label>
-                <button onClick={handleAddQuestion} disabled={busy || !question.trim()}
-                  className="bg-blue-600 text-white rounded px-4 py-1.5 text-sm disabled:opacity-50">
-                  Add question
-                </button>
-              </div>
+              ) : (
+                <ul className="max-h-[32rem] divide-y divide-slate-100 overflow-y-auto">
+                  {detail.questions.map((q) => (
+                    <li key={q.id} className="flex justify-between gap-3 px-5 py-3 text-xs">
+                      <div className="min-w-0 space-y-1">
+                        <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-slate-900">
+                          {q.question}
+                          {q.should_refuse && <Badge tone="warning">should be refused</Badge>}
+                          {q.source === "generated" && <Badge>drafted</Badge>}
+                        </p>
+                        {q.evidence.map((e, i) => (
+                          <p key={i} className="text-slate-600">
+                            evidence: “{e}”
+                          </p>
+                        ))}
+                        {q.filename && <p className="text-slate-500">file: {q.filename}</p>}
+                        {q.reference_answer && <p className="text-slate-500">reference: {q.reference_answer}</p>}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="self-start text-red-600 hover:text-red-700"
+                        aria-label="Delete question"
+                        disabled={busy}
+                        onClick={() => guarded("delete-q", async () => { await deleteQuestion(q.id); refreshSet(detail.id); })}
+                      >
+                        ✕
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
 
-              <div className="border-t border-gray-200 pt-3 flex items-center gap-3 text-sm">
-                <span>Draft questions from this workspace&apos;s text:</span>
-                <input type="number" min={1} max={20} value={draftCount} onChange={(e) => setDraftCount(Number(e.target.value))}
-                  className="w-16 border border-gray-300 rounded p-1" />
-                <button onClick={handleDraft} disabled={busy}
-                  className="border border-blue-600 text-blue-600 rounded px-3 py-1 text-xs disabled:opacity-50">
-                  Draft (~{Math.ceil(draftCount / 4)} LLM calls)
-                </button>
-              </div>
-            </section>
-
-            <section className="border border-gray-300 rounded-lg bg-white p-4 space-y-3">
-              <h2 className="font-semibold text-sm">Run an evaluation</h2>
-              <div className="flex flex-wrap items-center gap-4 text-sm">
-                <label>
-                  Retrieval{" "}
-                  <select value={mode} onChange={(e) => { setMode(e.target.value); if (e.target.value !== "hybrid") { setRerank(false); setTransforms([]); setGenerate(false); } }}
-                    className="border border-gray-300 rounded p-1">
-                    <option value="dense">dense</option>
-                    <option value="sparse">sparse (keywords)</option>
-                    <option value="hybrid">hybrid</option>
-                  </select>
-                </label>
-                <label className={hybridOnly ? "text-gray-400" : ""}>
-                  <input type="checkbox" disabled={hybridOnly} checked={rerank} onChange={(e) => setRerank(e.target.checked)} /> rerank
-                </label>
-                {TRANSFORMS.map((t) => (
-                  <label key={t} className={hybridOnly ? "text-gray-400" : ""}>
-                    <input type="checkbox" disabled={hybridOnly} checked={transforms.includes(t)} onChange={() => toggleTransform(t)} /> {t}
+            <div className="space-y-6">
+              <Card title="Add a question">
+                <div className="space-y-3">
+                  <Field label="Question">
+                    <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Question" className={inputClass} />
+                  </Field>
+                  <Field label="Evidence" hint="One per line. Leave empty for refusal questions.">
+                    <textarea
+                      value={evidence}
+                      onChange={(e) => setEvidence(e.target.value)}
+                      rows={2}
+                      placeholder="Evidence: a short exact phrase from the document that answers it (one per line)"
+                      className={inputClass}
+                    />
+                  </Field>
+                  <Field label="Reference answer">
+                    <input
+                      value={reference}
+                      onChange={(e) => setReference(e.target.value)}
+                      placeholder="Reference answer (optional, used to grade answers)"
+                      className={inputClass}
+                    />
+                  </Field>
+                  <Field label="File filter">
+                    <input
+                      value={filename}
+                      onChange={(e) => setFilename(e.target.value)}
+                      placeholder="Only count this file (optional)"
+                      className={inputClass}
+                    />
+                  </Field>
+                  <label className="flex items-start gap-2 text-xs text-slate-700">
+                    <input type="checkbox" className={cx(CHECKBOX, "mt-0.5")} checked={shouldRefuse} onChange={(e) => setShouldRefuse(e.target.checked)} />
+                    The documents do NOT answer this (the system should refuse; leave evidence empty)
                   </label>
-                ))}
-                <label className={hybridOnly ? "text-gray-400" : ""}>
-                  <input type="checkbox" disabled={hybridOnly} checked={generate} onChange={(e) => setGenerate(e.target.checked)} /> also grade answers
-                </label>
-              </div>
-              <div className="flex items-center gap-3">
-                <button onClick={handleRun} disabled={busy || questionCount === 0}
-                  className="bg-blue-600 text-white rounded px-4 py-1.5 text-sm disabled:opacity-50">
-                  {busy ? "Running..." : "Run"}
-                </button>
-                <span className="text-xs text-gray-500">
-                  {estimatedCalls === 0 ? "No LLM calls." : `Up to ${estimatedCalls} LLM calls (capped at 60 per run).`}
-                </span>
-              </div>
-            </section>
+                  <Button onClick={handleAddQuestion} disabled={busy || !question.trim()} loading={action === "add"} className="w-full">
+                    Add question
+                  </Button>
+                </div>
+              </Card>
 
-            <section className="border border-gray-300 rounded-lg bg-white p-4 space-y-3 overflow-x-auto">
-              <h2 className="font-semibold text-sm">Runs</h2>
-              {runs.length === 0 && <p className="text-xs text-gray-500">No runs yet.</p>}
-              {runs.length > 0 && (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left border-b border-gray-200">
-                      <th className="py-1 pr-2">#</th><th className="pr-2">Setting</th><th className="pr-2">Hit@5</th>
-                      <th className="pr-2">Recall@5</th><th className="pr-2">MRR</th><th className="pr-2">NDCG@5</th>
-                      <th className="pr-2">Faithful</th><th className="pr-2">Correct</th><th className="pr-2">LLM</th><th />
+              <Card title="Draft questions" description="Draft questions from this workspace's text.">
+                <div className="space-y-3">
+                  <div className="flex items-end gap-2">
+                    <Field label="Count" className="w-24">
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={draftCount}
+                        onChange={(e) => setDraftCount(Number(e.target.value))}
+                        className={inputClass}
+                      />
+                    </Field>
+                    <Button variant="secondary" onClick={handleDraft} disabled={busy} loading={action === "draft"}>
+                      Draft
+                    </Button>
+                  </div>
+                  <Alert tone="warning">Uses ~{Math.ceil(draftCount / 4)} LLM calls.</Alert>
+                </div>
+              </Card>
+            </div>
+          </div>
+
+          <Card title="Run an evaluation">
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                <div>
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">Retrieval</span>
+                  <Segmented
+                    options={[
+                      { value: "dense", label: "dense" },
+                      { value: "sparse", label: "sparse (keywords)" },
+                      { value: "hybrid", label: "hybrid" },
+                    ]}
+                    value={mode}
+                    onChange={changeMode}
+                  />
+                </div>
+                <div className={cx("flex flex-wrap items-center gap-4 text-sm text-slate-700", hybridOnly && "opacity-40")}>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" className={CHECKBOX} disabled={hybridOnly} checked={rerank} onChange={(e) => setRerank(e.target.checked)} /> rerank
+                  </label>
+                  {TRANSFORMS.map((t) => (
+                    <label key={t} className="flex items-center gap-2">
+                      <input type="checkbox" className={CHECKBOX} disabled={hybridOnly} checked={transforms.includes(t)} onChange={() => toggleTransform(t)} /> {t}
+                    </label>
+                  ))}
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" className={CHECKBOX} disabled={hybridOnly} checked={generate} onChange={(e) => setGenerate(e.target.checked)} /> also grade answers
+                  </label>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button onClick={handleRun} disabled={busy || questionCount === 0} loading={action === "run"}>
+                  {action === "run" ? "Running..." : "Run"}
+                </Button>
+                {estimatedCalls === 0 ? (
+                  <span className="text-xs text-slate-500">No LLM calls.</span>
+                ) : (
+                  <Alert tone="warning" className="flex-1">
+                    Up to {estimatedCalls} LLM calls (capped at 60 per run).
+                  </Alert>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          <Card
+            title="Runs"
+            description="Click a run to see every question, what was retrieved, and which chunks matched."
+            padded={false}
+          >
+            {runs.length === 0 ? (
+              <div className="p-5">
+                <EmptyState title="No runs yet." description="Configure a run above and press Run." />
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="border-b border-slate-200 bg-slate-50">
+                    <tr>
+                      <th className={TH}>#</th>
+                      <th className={TH}>Setting</th>
+                      <th className={TH}>Hit@5</th>
+                      <th className={TH}>Recall@5</th>
+                      <th className={TH}>MRR</th>
+                      <th className={TH}>NDCG@5</th>
+                      <th className={TH}>Faithful</th>
+                      <th className={TH}>Correct</th>
+                      <th className={TH}>LLM</th>
+                      <th className={TH} />
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-slate-100">
                     {runs.map((r) => (
-                      <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
-                        onClick={() => getRun(r.id).then(setOpenRun).catch(fail)}>
-                        <td className="py-1 pr-2">{r.id}</td>
-                        <td className="pr-2">{r.label}{r.status !== "completed" ? ` (${r.status})` : ""}</td>
-                        <td className="pr-2">{metric(r.metrics, "hit@5")}</td>
-                        <td className="pr-2">{metric(r.metrics, "recall@5")}</td>
-                        <td className="pr-2">{metric(r.metrics, "mrr")}</td>
-                        <td className="pr-2">{metric(r.metrics, "ndcg@5")}</td>
-                        <td className="pr-2">{r.metrics?.generation?.faithfulness?.toFixed(2) ?? "—"}</td>
-                        <td className="pr-2">{r.metrics?.generation?.correctness?.toFixed(2) ?? "—"}</td>
-                        <td className="pr-2">{r.llm_calls}</td>
-                        <td>
-                          <button className="text-red-600" onClick={(e) => { e.stopPropagation(); guarded(async () => { await deleteRun(r.id); if (setId !== null) refreshSet(setId); }); }}>✕</button>
+                      <tr
+                        key={r.id}
+                        className={cx("cursor-pointer tabular-nums hover:bg-slate-50", openRun?.id === r.id && "bg-brand-50/60")}
+                        onClick={() => getRun(r.id).then(setOpenRun).catch(fail)}
+                      >
+                        <td className={TD}>{r.id}</td>
+                        <td className={TD}>
+                          <span className="font-medium text-slate-800">{r.label}</span>
+                          {r.status !== "completed" && (
+                            <span className="ml-1.5">
+                              <StatusBadge status={r.status} />
+                            </span>
+                          )}
+                        </td>
+                        <td className={TD}>{metric(r.metrics, "hit@5")}</td>
+                        <td className={TD}>{metric(r.metrics, "recall@5")}</td>
+                        <td className={TD}>{metric(r.metrics, "mrr")}</td>
+                        <td className={TD}>{metric(r.metrics, "ndcg@5")}</td>
+                        <td className={TD}>{r.metrics?.generation?.faithfulness?.toFixed(2) ?? "—"}</td>
+                        <td className={TD}>{r.metrics?.generation?.correctness?.toFixed(2) ?? "—"}</td>
+                        <td className={TD}>{r.llm_calls}</td>
+                        <td className={TD}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-red-600 hover:text-red-700"
+                            aria-label="Delete run"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              guarded("delete-run", async () => {
+                                await deleteRun(r.id);
+                                if (setId !== null) refreshSet(setId);
+                              });
+                            }}
+                          >
+                            ✕
+                          </Button>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              )}
-              <p className="text-xs text-gray-400">Click a run to see every question, what was retrieved, and which chunks matched.</p>
-            </section>
+              </div>
+            )}
+          </Card>
 
-            {openRun && (
-              <section className="border border-gray-300 rounded-lg bg-white p-4 space-y-3">
-                <h2 className="font-semibold text-sm">Run #{openRun.id}: {openRun.label}</h2>
+          {openRun && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Run #{openRun.id}: {openRun.label}
+                </h2>
                 {openRun.metrics && (
-                  <p className="text-xs text-gray-600">
+                  <p className="mt-0.5 text-xs text-slate-500">
                     {openRun.metrics.n_answerable} scored · {openRun.metrics.n_refusal_questions} refusal question(s) ·{" "}
                     {openRun.metrics.n_errors} error(s) · retrieval {Math.round(openRun.metrics.retrieval_ms ?? 0)} ms/question
                   </p>
                 )}
-                {openRun.results.map((r) => (
-                  <div key={r.question_id} className="border border-gray-200 rounded p-2 text-xs space-y-1">
-                    <p className="font-medium text-sm">{r.question}</p>
-                    {r.error && <p className="text-red-600">Error: {r.error}</p>}
-                    {!r.should_refuse && !r.error && (
-                      <p className={r.first_relevant_rank ? "text-green-700" : "text-red-600"}>
-                        {r.first_relevant_rank ? `First relevant chunk at rank ${r.first_relevant_rank}` : "No relevant chunk in the top 10"}
-                      </p>
-                    )}
-                    {r.generation && (
-                      <p className="text-gray-700">
-                        {r.generation.skipped ? `Answer skipped: ${r.generation.skipped}` : `Answer: ${r.generation.answer ?? "—"}`}
-                        {r.generation.faithfulness !== null && ` · faithful ${r.generation.faithfulness}`}
-                        {r.generation.correctness !== null && ` · correct ${r.generation.correctness}`}
-                        {r.generation.refusal_correct !== null && ` · refusal ${r.generation.refusal_correct ? "correct" : "WRONG"}`}
-                        {r.generation.false_refusal && " · wrongly refused"}
-                      </p>
-                    )}
-                    {r.retrieved && (
-                      <details>
-                        <summary className="cursor-pointer text-gray-500">Retrieved chunks ({r.retrieved.length})</summary>
-                        <ol className="mt-1 space-y-1">
-                          {r.retrieved.map((c) => (
-                            <li key={c.chunk_id} className={`p-1 rounded ${c.relevant ? "bg-green-50 border border-green-200" : "bg-gray-50"}`}>
-                              <span className="font-mono">#{c.rank}</span> {c.filename}
-                              {c.page_number !== null ? ` p.${c.page_number}` : ""} · {c.chunk_type} — {c.snippet}
-                            </li>
-                          ))}
-                        </ol>
-                      </details>
-                    )}
-                  </div>
-                ))}
-              </section>
-            )}
-          </>
-        )}
+              </div>
 
-        <div className="flex justify-between text-sm pt-2">
-          <a href="/inspector" className="text-blue-600 underline">← Inspector</a>
-          <a href="/experiments" className="text-blue-600 underline">Experiments →</a>
-        </div>
-      </div>
-    </main>
+              {openRun.metrics && (
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+                  <Stat label="Hit@5" value={metric(openRun.metrics, "hit@5")} />
+                  <Stat label="Recall@5" value={metric(openRun.metrics, "recall@5")} />
+                  <Stat label="MRR" value={metric(openRun.metrics, "mrr")} />
+                  <Stat label="NDCG@5" value={metric(openRun.metrics, "ndcg@5")} />
+                  <Stat label="Faithful" value={openRun.metrics.generation?.faithfulness?.toFixed(2) ?? "—"} />
+                  <Stat label="Correct" value={openRun.metrics.generation?.correctness?.toFixed(2) ?? "—"} />
+                </div>
+              )}
+
+              {openK && openK.rows.length > 0 && (
+                <Card title="Retrieval metrics by k" padded={false}>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="border-b border-slate-200 bg-slate-50">
+                        <tr>
+                          <th className={TH}>Metric</th>
+                          {openK.ks.map((k) => (
+                            <th key={k} className={TH}>
+                              @{k}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 tabular-nums">
+                        {openK.rows.map(([name, values]) => (
+                          <tr key={name}>
+                            <td className={cx(TD, "font-medium text-slate-800")}>{name}</td>
+                            {openK.ks.map((k) => (
+                              <td key={k} className={TD}>
+                                {values.has(k) ? values.get(k)!.toFixed(3) : "—"}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              )}
+
+              <Card title="Per-question results" padded={false}>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="border-b border-slate-200 bg-slate-50">
+                      <tr>
+                        <th className={TH}>Question</th>
+                        <th className={TH}>Retrieval</th>
+                        <th className={TH}>Answer</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 align-top">
+                      {openRun.results.map((r) => (
+                        <tr key={r.question_id}>
+                          <td className={cx(TD, "min-w-[16rem] max-w-md")}>
+                            <p className="font-medium text-slate-900">{r.question}</p>
+                            {r.should_refuse && (
+                              <Badge tone="warning" className="mt-1">
+                                should be refused
+                              </Badge>
+                            )}
+                            {r.error && <p className="mt-1 text-xs text-red-600">Error: {r.error}</p>}
+                            {r.retrieved && (
+                              <details className="mt-2 text-xs">
+                                <summary className="cursor-pointer text-slate-500">Retrieved chunks ({r.retrieved.length})</summary>
+                                <ol className="mt-1.5 space-y-1">
+                                  {r.retrieved.map((c) => (
+                                    <li
+                                      key={c.chunk_id}
+                                      className={cx(
+                                        "rounded-md p-1.5",
+                                        c.relevant ? "border border-emerald-200 bg-emerald-50" : "bg-slate-50"
+                                      )}
+                                    >
+                                      <span className="font-mono">#{c.rank}</span> {c.filename}
+                                      {c.page_number !== null ? ` p.${c.page_number}` : ""} · {c.chunk_type} — {c.snippet}
+                                    </li>
+                                  ))}
+                                </ol>
+                              </details>
+                            )}
+                          </td>
+                          <td className={cx(TD, "whitespace-nowrap")}>
+                            {!r.should_refuse && !r.error ? (
+                              r.first_relevant_rank ? (
+                                <Badge tone="success">First relevant chunk at rank {r.first_relevant_rank}</Badge>
+                              ) : (
+                                <Badge tone="danger">No relevant chunk in the top 10</Badge>
+                              )
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className={cx(TD, "min-w-[14rem] text-xs text-slate-700")}>
+                            {r.generation ? (
+                              <div className="space-y-1">
+                                <p>
+                                  {r.generation.skipped ? `Answer skipped: ${r.generation.skipped}` : `Answer: ${r.generation.answer ?? "—"}`}
+                                </p>
+                                <div className="flex flex-wrap gap-1">
+                                  {r.generation.faithfulness !== null && <Badge>faithful {r.generation.faithfulness}</Badge>}
+                                  {r.generation.correctness !== null && <Badge>correct {r.generation.correctness}</Badge>}
+                                  {r.generation.refusal_correct !== null && (
+                                    <Badge tone={r.generation.refusal_correct ? "success" : "danger"}>
+                                      refusal {r.generation.refusal_correct ? "correct" : "WRONG"}
+                                    </Badge>
+                                  )}
+                                  {r.generation.false_refusal && <Badge tone="danger">wrongly refused</Badge>}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
