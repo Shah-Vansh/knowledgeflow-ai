@@ -1,20 +1,38 @@
 import os
-import shutil
 import tempfile
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import DEFAULT_WORKSPACE_ID, get_db, require_workspace
+from app.core.config import settings
 from app.db.models import Document, Chunk
-from app.rag.pipeline import ingest_document, rechunk_document
+from app.jobs import queue
+from app.rag.pipeline import ingest_document, new_document, rechunk_document
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-ALLOWED_EXTENSIONS = {"pdf", "txt"}
+ALLOWED_EXTENSIONS = {"pdf", "txt", "png", "jpg", "jpeg"}
+UPLOAD_READ_BYTES = 1024 * 1024
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+JPEG_SIGNATURE = b"\xff\xd8\xff"
+
+
+def content_matches_extension(ext: str, head: bytes) -> bool:
+    """Checks the first bytes of the upload against what the extension promises."""
+    if ext == "pdf":
+        return b"%PDF-" in head[:1024]
+    if ext == "png":
+        return head.startswith(PNG_SIGNATURE)
+    if ext in {"jpg", "jpeg"}:
+        return head.startswith(JPEG_SIGNATURE)
+    if ext == "txt":
+        return b"\x00" not in head
+    return False
 
 
 class RechunkRequest(BaseModel):
@@ -36,32 +54,78 @@ async def upload_document(
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type: .{ext}. Allowed: pdf, txt",
+            detail=f"Unsupported file type: .{ext}. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
     require_workspace(db, workspace_id)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
-
+    limit = settings.MAX_UPLOAD_MB * 1024 * 1024
+    tmp_path = None
     try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+            tmp_path = tmp.name
+            total = 0
+            while True:
+                block = file.file.read(UPLOAD_READ_BYTES)
+                if not block:
+                    break
+                if total == 0 and not content_matches_extension(ext, block):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"File content does not match the .{ext} extension",
+                    )
+                total += len(block)
+                if total > limit:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File is too large (limit {settings.MAX_UPLOAD_MB} MB)",
+                    )
+                tmp.write(block)
+            if total == 0 and not content_matches_extension(ext, b""):
+                raise HTTPException(status_code=400, detail=f"File content does not match the .{ext} extension")
+
+        if settings.INGEST_ASYNC:
+            # Store the bytes with the job and answer at once; a worker ingests it.
+            # The document and its job are committed together.
+            with open(tmp_path, "rb") as stored:
+                file_data = stored.read()
+            document = new_document(db, file.filename, workspace_id, status="queued", commit=False)
+            job = queue.enqueue(
+                db, "ingest", document.workspace_id,
+                payload={"strategy": strategy, "chunk_size": chunk_size, "overlap": overlap},
+                document_id=document.id, file_data=file_data,
+            )
+            db.commit()
+            return JSONResponse(status_code=202, content={
+                "document_id": document.id,
+                "filename": document.filename,
+                "status": document.status,
+                "workspace_id": document.workspace_id,
+                "ingest_report": None,
+                "job_id": job.id,
+            })
+
         document = ingest_document(
             db, tmp_path, file.filename,
             strategy=strategy, chunk_size=chunk_size, overlap=overlap,
             workspace_id=workspace_id,
         )
     finally:
-        os.remove(tmp_path)
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
     if document.status == "failed":
-        raise HTTPException(status_code=422, detail="Document processing failed")
+        notes = (document.ingest_report or {}).get("notes") or []
+        detail = "Document processing failed" + (f": {notes[0]}" if notes else "")
+        raise HTTPException(status_code=422, detail=detail)
 
     return {
         "document_id": document.id,
         "filename": document.filename,
         "status": document.status,
         "workspace_id": document.workspace_id,
+        "ingest_report": document.ingest_report,
+        "job_id": None,
     }
 
 
@@ -87,6 +151,7 @@ def list_documents(
             "source_type": d.source_type,
             "workspace_id": d.workspace_id,
             "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
+            "ingest_report": d.ingest_report,
         }
         for d in documents
     ]
@@ -109,6 +174,8 @@ def get_document_chunks(document_id: int, db: Session = Depends(get_db)):
             "chunk_size": c.chunk_size,
             "overlap": c.overlap,
             "page_number": c.page_number,
+            "chunk_type": c.chunk_type,
+            "ocr_confidence": c.ocr_confidence,
         }
         for c in chunks
     ]

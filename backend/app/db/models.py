@@ -2,8 +2,11 @@ from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import (
+    Boolean,
+    LargeBinary,
     Computed,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -18,6 +21,32 @@ from pgvector.sqlalchemy import Vector
 
 from app.db.base import Base
 from app.core.config import settings
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), nullable=False, unique=True)  # stored lowercase
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkspaceMember(Base):
+    """Who may use a workspace, and how: viewer < editor < owner."""
+
+    __tablename__ = "workspace_members"
+
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Workspace(Base):
@@ -50,6 +79,9 @@ class Document(Base):
         ForeignKey("workspaces.id"), nullable=False, server_default=text("1"), index=True
     )
 
+    # What multimodal ingestion did with this file (pages OCR'd, tables found, notes ...)
+    ingest_report: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
     chunks: Mapped[List["Chunk"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
@@ -68,6 +100,11 @@ class Chunk(Base):
     chunk_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     overlap: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     page_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # "text" | "table" | "ocr" (scanned page / image file) | "image_text" (text inside an embedded image)
+    chunk_type: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'text'"))
+    # mean OCR confidence (0-1) for chunks that came from OCR, otherwise NULL
+    ocr_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # Database-computed (GENERATED ALWAYS AS ... STORED): declared with Computed so
     # SQLAlchemy never tries to INSERT a value into it.
@@ -109,7 +146,10 @@ class Message(Base):
     )
     role: Mapped[str] = mapped_column(String, nullable=False)  # "user" | "assistant"
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # assistant messages: the structured sources the answer was built from
     sources: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # assistant messages: the standalone question actually searched (when the
+    # follow-up was rewritten); None when the message was searched as typed
     standalone_question: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -178,3 +218,120 @@ class ChunkEntity(Base):
     entity_id: Mapped[int] = mapped_column(
         ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True, index=True
     )
+    
+
+
+class EvalSet(Base):
+    """A golden set: questions with the evidence text that must be retrieved to answer them."""
+
+    __tablename__ = "eval_sets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvalQuestion(Base):
+    """
+    Relevance is defined by EVIDENCE TEXT, not chunk ids: a retrieved chunk counts as
+    relevant when it contains one of the evidence snippets. Chunk ids change whenever a
+    document is re-chunked, snippets don't, so one golden set can score any chunking.
+    """
+
+    __tablename__ = "eval_questions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    eval_set_id: Mapped[int] = mapped_column(
+        ForeignKey("eval_sets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    reference_answer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    should_refuse: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    filename: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    source: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'manual'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Experiment(Base):
+    """A named set of configuration variants to compare on one eval set."""
+
+    __tablename__ = "experiments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    eval_set_id: Mapped[int] = mapped_column(
+        ForeignKey("eval_sets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    variants: Mapped[list] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvalRun(Base):
+    __tablename__ = "eval_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    eval_set_id: Mapped[int] = mapped_column(
+        ForeignKey("eval_sets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    experiment_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("experiments.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    variant_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    label: Mapped[str] = mapped_column(String, nullable=False)
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)           # "completed" | "failed"
+    metrics: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    question_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    llm_calls: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    elapsed_ms: Mapped[float] = mapped_column(Float, nullable=False, server_default=text("0"))
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvalResult(Base):
+    __tablename__ = "eval_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("eval_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("eval_questions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    details: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class Job(Base):
+    """
+    A unit of background work (Phase 16). Workers claim queued jobs with
+    SELECT ... FOR UPDATE SKIP LOCKED, so several workers never take the same job.
+    """
+
+    __tablename__ = "jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)               # "ingest"
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'queued'"))
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    file_data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)  # cleared when done
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("3"))
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    locked_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

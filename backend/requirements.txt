@@ -14,3 +14,7 @@ sentence-transformers==3.1.1
 pgvector==0.3.5
 python-multipart==0.0.12
 langgraph==1.2.16
+rapidocr-onnxruntime==1.4.4
+opencv-python==4.10.0.84
+argon2-cffi==23.1.0
+PyJWT==2.9.0

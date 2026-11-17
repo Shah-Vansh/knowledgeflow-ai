@@ -1,4 +1,5 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { workspaceForUnscopedCall } from "@/lib/auth";
 
 export interface Source {
   document_id: number;
@@ -28,6 +29,7 @@ export async function askQuestion(
       question,
       document_ids: documentIds && documentIds.length > 0 ? documentIds : undefined,
       transforms,
+      workspace_id: workspaceForUnscopedCall(),
     }),
   });
 

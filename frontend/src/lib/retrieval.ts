@@ -1,4 +1,5 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { workspaceForUnscopedCall } from "@/lib/auth";
 
 export type RetrievalMode = "dense" | "sparse" | "hybrid";
 
@@ -68,6 +69,7 @@ export async function retrieveDebug(
       mode,
       rerank,
       transforms,
+      workspace_id: workspaceForUnscopedCall(),
       document_ids: documentIds && documentIds.length > 0 ? documentIds : undefined,
     }),
   });

@@ -1,4 +1,5 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { workspaceForUnscopedCall } from "@/lib/auth";
 
 export interface ConversationSource {
   document_id: number;
@@ -46,7 +47,8 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
   return typeof body.detail === "string" ? body.detail : `${fallback} (status ${response.status})`;
 }
 
-export async function listConversations(workspaceId?: number): Promise<ConversationSummary[]> {
+export async function listConversations(requested?: number): Promise<ConversationSummary[]> {
+  const workspaceId = requested ?? workspaceForUnscopedCall();
   const url =
     workspaceId !== undefined
       ? `${API_BASE_URL}/conversations?workspace_id=${workspaceId}`

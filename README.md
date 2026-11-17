@@ -1,21 +1,23 @@
 # KnowledgeFlow AI
 
-Enterprise Knowledge & Research Copilot — an AI knowledge platform built progressively, phase by phase, to learn Retrieval-Augmented Generation (RAG) from beginner to production level.
+Enterprise Knowledge & Research Copilot — an AI knowledge platform built phase by phase to learn Retrieval-Augmented Generation (RAG) from the basics up to a production-shaped system.
 
-## Current Status: Phase 7 — Query Transformation ✅
+## Current Status: Phases 0–16 complete ✅
 
-A working RAG pipeline with configurable chunking, page-level source attribution, document lifecycle management, hybrid retrieval (dense vector search + PostgreSQL full-text search fused with Reciprocal Rank Fusion), a local cross-encoder reranker, optional LLM query transformation (rewrite, keyword expansion, multi-query, HyDE), and dedicated chunking and retrieval debugging interfaces — built and verified through eight phases, each tested before moving to the next.
+Documents (PDF, TXT, scanned pages, images) are ingested into workspaces, chunked, embedded locally and stored in PostgreSQL with pgvector and PostgreSQL full-text search. Questions are answered from those documents only, through hybrid retrieval, a local cross-encoder reranker, optional query transformation, conversation memory, a knowledge graph and a small LangGraph agent. Retrieval quality is measured with a golden-set evaluation and compared across configurations in an experimentation lab. The API has user accounts, per-workspace roles, rate limits and prompt-injection hardening, and can run uploads through a PostgreSQL job queue with a separate worker, structured logs, readiness checks and Prometheus metrics.
 
 ## Tech Stack
 
 - **Frontend:** Next.js, React, TypeScript, Tailwind CSS
-- **Backend:** Python, FastAPI, Pydantic, SQLAlchemy, Alembic
-- **Database:** PostgreSQL + pgvector (compiled from source) + built-in full-text search
-- **Embeddings:** Local, free — `sentence-transformers` (`all-MiniLM-L6-v2`, 384-dim), runs entirely on-device, no API key or cost
-- **Reranker:** Local cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`), runs on-device
+- **Backend:** Python 3.11, FastAPI, Pydantic, SQLAlchemy, Alembic, LangGraph
+- **Database:** PostgreSQL 18 + pgvector (compiled from source) + built-in full-text search
+- **Embeddings:** local `sentence-transformers` (`all-MiniLM-L6-v2`, 384-dim), no API key
+- **Reranker:** local cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`)
+- **OCR:** RapidOCR (ONNX), local
 - **LLM:** Groq (`openai/gpt-oss-20b`), free tier
+- **Auth:** Argon2id password hashing (`argon2-cffi`), HS256 JWT access tokens (`PyJWT`)
 
-> **Note:** This project runs natively on Windows (no Docker). Docker was evaluated but dropped due to a Windows image on this machine that doesn't support WSL2/virtualization required by Docker Desktop. pgvector was compiled from source using Visual Studio Build Tools since no prebuilt Windows binary exists.
+> **Note:** This project runs natively on Windows (no Docker). Docker Desktop needs WSL2/virtualization, which this machine's Windows image doesn't support. pgvector was compiled from source with Visual Studio Build Tools since no prebuilt Windows binary exists.
 
 ## Setup
 
@@ -38,6 +40,7 @@ A working RAG pipeline with configurable chunking, page-level source attribution
   \c knowledgeflow
   CREATE EXTENSION IF NOT EXISTS vector;
 ```
+  The test suite creates and migrates its own `knowledgeflow_test` database automatically; the database user needs permission to create databases (or create it yourself and enable `vector` in it).
 
 ### 2. Backend
 
@@ -46,76 +49,79 @@ cd backend
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-Copy the example env file and edit it:
-```
 copy .env.example .env
 ```
 
-Fill in `backend/.env`:
+Fill in `backend/.env`. `.env.example` lists every setting with comments; the important ones:
+
 ```
 DATABASE_URL=postgresql+psycopg2://postgres:YOUR_PASSWORD@localhost:5432/knowledgeflow
 ENVIRONMENT=development
-LOG_LEVEL=INFO
 CORS_ORIGINS=http://localhost:3000
-
-GROQ_API_KEY=gsk_your_key_here
-GROQ_LLM_MODEL=openai/gpt-oss-20b
-EMBEDDING_MODEL=all-MiniLM-L6-v2
-EMBEDDING_DIM=384
-TOP_K=5
-SIMILARITY_THRESHOLD=0.8
-
-RERANK_ENABLED=true
-RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
-RERANK_CANDIDATES=20
-
-QUERY_TRANSFORMS=
-MULTI_QUERY_COUNT=3
+GROQ_API_KEY=                # your Groq key; never commit .env
 ```
 
-`QUERY_TRANSFORMS` is the default strategy list for `/query` (comma-separated from `rewrite`, `expand`, `multi_query`, `hyde`). Leave it empty to run without query transformation.
-
-Apply database migrations:
+Apply database migrations and start the API:
 ```
 alembic upgrade head
-```
-
-Run the backend:
-```
 uvicorn app.main:app --reload
 ```
-Backend runs at http://localhost:8000. The embedding model (and, on first reranked request, the cross-encoder, ~90 MB) downloads once and loads lazily, so the first request after a restart is slow.
+The API runs at http://localhost:8000 (use `--port 8001` if another app already uses 8000, and point `NEXT_PUBLIC_API_URL` at it). Local models download once and load lazily, so the first request after a restart is slow.
 
 ### 3. Frontend
 
-Open a new terminal:
 ```
 cd frontend
 npm install
-copy .env.example .env
-```
-
-`frontend/.env`:
-```
-NEXT_PUBLIC_API_URL=http://localhost:8000
-```
-
-Run the frontend:
-```
+copy .env.example .env      # NEXT_PUBLIC_API_URL=http://localhost:8000
 npm run dev
 ```
-Frontend runs at http://localhost:3000
+The frontend runs at http://localhost:3000.
 
-### 4. Verify everything is connected
+### 4. Verify
 
 ```
-curl http://localhost:8000/health
+curl http://localhost:8000/health/ready
 ```
-Expected: `{"status": "ok", "db_connected": true, "environment": "development"}`
+Expected: `{"status": "ready", "checks": {"database": true, "migrations": true}}`. A 503 with `"migrations": false` means `alembic upgrade head` hasn't been run.
 
-Open http://localhost:3000 — you should see a green "Backend Connected" status.
+## Turning on authentication
+
+Auth is **off** by default so a single-user local install keeps working. To turn it on, add to `backend/.env`:
+
+```
+AUTH_REQUIRED=true
+JWT_SECRET=             # paste the output of the command below
+```
+Generate the secret (it is printed only in your own terminal; keep it out of git):
+```
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+Restart the API, open http://localhost:3000/login and register. **The first account becomes owner of every existing workspace.** Later accounts need `REGISTRATION_OPEN=true` (the default) and start with no workspaces until an owner adds them on the workspace's members list. Set `REGISTRATION_OPEN=false` once your users exist.
+
+With `ENVIRONMENT=production` the API refuses to start unless auth is on, the secret is long and random, the JWT algorithm is HS256/384/512, CORS lists explicit origins, and every route has an access policy. `/docs` is disabled in production.
+
+## Running uploads in the background
+
+By default an upload is processed inside the request (simple, but a scanned PDF can take a minute). For production:
+
+```
+INGEST_ASYNC=true
+```
+Uploads then return `202` at once with a `job_id`; the upload page polls `GET /jobs/{job_id}` and shows progress. Run one or more workers next to the API:
+```
+cd backend
+venv\Scripts\activate
+python -m app.worker
+```
+or set `RUN_EMBEDDED_WORKER=true` to run one worker thread inside the API process. Ctrl+C lets the current job finish first.
+
+## Observability
+
+- **Logs:** `LOG_FORMAT=json` writes one JSON object per line (time, level, logger, message, request id, and for the access log: method, route template, status, duration, user id). Bearer tokens, JWTs, passwords in URLs or `key=value` pairs and provider API keys are redacted in both text and JSON logs.
+- **Request ids:** every response carries `X-Request-ID` (a well-formed incoming id is echoed), and every log line of that request carries the same id.
+- **Health:** `GET /health/live` (process answers, never touches the database), `GET /health/ready` (database reachable and schema at the migration head; 503 otherwise), `GET /health` (original check).
+- **Metrics:** `GET /metrics` in Prometheus text format: request counts and latency histograms by route template, job outcomes and durations, queue depth by status, oldest queued job age, and query-embedding cache hits/misses/size. Set `METRICS_TOKEN` (24+ characters) and scrape with `Authorization: Bearer <token>`; with auth on and no token, `/metrics` is disabled.
 
 ## Run Backend Tests
 
@@ -125,7 +131,9 @@ venv\Scripts\activate
 pytest
 ```
 
-One test (`test_rag_pipeline_api.py`) requires a `GROQ_API_KEY` exported as a shell environment variable to run (it calls the live LLM); it skips cleanly otherwise. The query-transformation tests use a fake LLM, so they make no API calls.
+Tests run against `<your database>_test` (created and migrated automatically; `KF_TEST_DB_RECREATE=1` rebuilds it) and refuse to run against a database whose name doesn't end in `_test`. All LLM-dependent tests use fake LLMs except one (`test_rag_pipeline_api.py`), which calls Groq only when `GROQ_API_KEY` is exported in the shell and skips otherwise. Embeddings and the reranker are the real local models.
+
+`python scripts/scan_secrets.py --history` checks tracked files and the whole git history for committed keys and passwords (it prints only file, line and kind, never the value).
 
 ## Features by Phase
 
@@ -133,77 +141,106 @@ One test (`test_rag_pipeline_api.py`) requires a `GROQ_API_KEY` exported as a sh
 |---|---|---|
 | 0 | Foundation — FastAPI + Next.js + PostgreSQL, health check | ✅ |
 | 1 | Basic RAG — upload, chunk, embed, retrieve, grounded answer | ✅ |
-| 2 | Chunking Laboratory — configurable strategies (fixed-size, recursive, sentence), overlap, side-by-side comparison | ✅ |
-| 3 | Document & Metadata Management — page-level source attribution, soft delete with cascade, document-scoped queries | ✅ |
-| 4 | Retrieval Laboratory — raw ranked retrieval debugging, configurable k/threshold, live threshold recompute | ✅ |
-| 5 | Hybrid Search — dense (pgvector) + sparse (PostgreSQL full-text search) fused with Reciprocal Rank Fusion; dense / sparse / hybrid comparison in the Retrieval Lab | ✅ |
-| 6 | Reranking — local cross-encoder re-scores a 20-candidate pool; before/after rank view in the Retrieval Lab | ✅ |
-| 7 | Query Transformation — rewrite, keyword expansion, multi-query, HyDE (one LLM call, fails open), multi-list RRF, per-chunk provenance | ✅ |
-| 8–16 | Conversational RAG, Multi-Workspace, Multimodal RAG, Agentic RAG, Graph RAG, Evaluation, Experimentation Lab, Productionization, Security | 🔜 |
+| 2 | Chunking Laboratory — fixed-size, recursive, sentence strategies with overlap, side-by-side comparison | ✅ |
+| 3 | Document & Metadata Management — page-level source attribution, soft delete, document-scoped queries | ✅ |
+| 4 | Retrieval Laboratory — ranked retrieval debugging, configurable k/threshold | ✅ |
+| 5 | Hybrid Search — dense (pgvector) + PostgreSQL full-text search fused with Reciprocal Rank Fusion | ✅ |
+| 6 | Reranking — local cross-encoder over a 20-candidate pool, before/after ranks | ✅ |
+| 7 | Query Transformation — rewrite, keyword expansion, multi-query, HyDE in one LLM call, fails open | ✅ |
+| 8 | Conversational RAG — conversations with history; follow-up questions are rewritten into standalone questions before retrieval | ✅ |
+| 9 | Workspaces — separate knowledge spaces; every query, conversation and document belongs to one | ✅ |
+| 10 | Multimodal ingestion — tables kept as Markdown tables, OCR for scanned pages and images, text found in embedded images; an ingest report says what was read and what was skipped | ✅ |
+| 11 | Agentic RAG — a LangGraph state machine; one LLM router call picks RAG, graph, document search, metadata or a safe calculator, falling back to RAG | ✅ |
+| 12 | Graph RAG — LLM-extracted entities and relations, each verified against its source chunk; graph traversal fused with hybrid retrieval | ✅ |
+| 13 | Evaluation — golden sets labelled by evidence text; hit@k, recall@k, precision@k, MRR, NDCG; optional LLM-judged faithfulness and correctness | ✅ |
+| 14 | Experimentation Lab — compare retrieval and chunking variants on one eval set with paired bootstrap confidence | ✅ |
+| 15 | Security — accounts, viewer/editor/owner roles per workspace, one deny-by-default policy table, rate limits, upload content checks, prompt fencing and answer sanitizing, security headers | ✅ |
+| 16 | Production runtime — PostgreSQL job queue (`SKIP LOCKED`) with retrying workers, query-embedding cache, JSON logs with redaction, readiness checks, Prometheus metrics | ✅ |
 
 ## Application Pages
 
-- `/` — health check / connection status
-- `/upload` — upload PDF/TXT documents with optional chunking configuration
-- `/query` — ask questions, optionally scoped to specific documents, with page-level source attribution
-- `/documents` — manage uploaded documents (view metadata, delete)
-- `/chunking-lab` — compare chunking strategies side by side on the same document
-- `/retrieval-lab` — compare dense, sparse, and hybrid retrieval on the same query; toggle the reranker and each query-transformation strategy; see the generated rewrite/keywords/variants/hypothetical passage, per-method scores, rank changes, and which query surfaced each chunk
+- `/` — connection status
+- `/login` — sign in / register (only needed when auth is on); the header then shows your email, the active workspace and Log out
+- `/upload` — upload PDF, TXT, PNG or JPG files into a workspace, with chunking options; shows background progress when uploads are queued
+- `/documents` — manage documents (metadata, delete)
+- `/inspector` — how each file was read: digital text, tables, OCR pages, text in images, skipped content
+- `/workspaces` — create and delete workspaces
+- `/query` — one-off questions with page-level sources
+- `/chat` — conversations with follow-up questions
+- `/agent` — the routed agent, showing which tool answered
+- `/graph` — build and explore the knowledge graph, ask graph-augmented questions
+- `/chunking-lab` — compare chunking strategies on the same document
+- `/retrieval-lab` — compare dense, sparse and hybrid retrieval, the reranker and each query transformation
+- `/eval` — golden sets, evaluation runs and per-question results
+- `/experiments` — retrieval/chunking variants compared against a baseline
 
 ## Architecture
 
 ```
-Document Upload (PDF/TXT)
+Upload (PDF/TXT/PNG/JPG)
+      ↓  size limit, extension AND content signature checked
+[INGEST_ASYNC] document "queued" + job row (same commit) → 202 → worker claims job (SKIP LOCKED)
       ↓
-Page-aware Text Extraction
+Typed elements: text | table | ocr | image_text   (bounded OCR, every skip reported)
       ↓
-Chunking (fixed_size | recursive | sentence, configurable)
+Chunking (fixed_size | recursive | sentence; tables by rows with the header repeated)
       ↓
-Embedding (local, sentence-transformers)
-      ↓
-PostgreSQL: pgvector embedding + generated full-text search_vector (GIN index)
+Embedding (local) → PostgreSQL: pgvector embedding + generated full-text search_vector
+      ↓ (optional, per document)
+Knowledge graph: LLM-proposed entities/relations, kept only if the cited chunk supports them
 
-Question
+Question (+ conversation history → standalone question)
       ↓
-[optional] Query transformation — ONE LLM call returning JSON
-      rewrite | expand (keywords) | multi_query | hyde
-      (fails open: on any error, only the original query is searched)
+[agent] one LLM router call → rag | graph | document search | metadata | calculator
       ↓
-Search jobs: the original query (always) + one per transformation
-      each runs dense (pgvector cosine) and/or sparse (PostgreSQL full-text)
+[optional] query transformation (one LLM call, fails open)
       ↓
-Reciprocal Rank Fusion across all result lists → candidate pool (20)
+Dense + PostgreSQL full-text search per query → Reciprocal Rank Fusion → 20 candidates
+      ↓  (graph evidence chunks fused in for graph questions)
+Cross-encoder rerank against the ORIGINAL question → top 5
       ↓
-[optional] Cross-encoder reranking, scored against the ORIGINAL question → top 5
+Grounding gate → prompt with every passage fenced as untrusted <document> data
       ↓
-Grounding gate — judged on the ORIGINAL query's own signals only
-      (dense within threshold OR a sparse keyword hit)
-      ↓
-Context Assembly → LLM (Groq) → Grounded Answer + Deduplicated Sources
+LLM (Groq) → answer sanitized (no images, active HTML or script URLs) + sources
 ```
 
-`EmbeddingProvider`, `LLMProvider` and `Reranker` are abstracted behind interfaces (`app/rag/embeddings.py`, `app/rag/llm.py`, `app/rag/reranker.py`) — the project originally used OpenAI for both embeddings and generation and was swapped to local embeddings + Groq mid-build with zero changes to any other file.
+Every request passes one access dependency driven by a single policy table (`app/core/access.py`): public, any signed-in user, or a minimum workspace role, with the workspace resolved from the path, query, body, form or the resource being touched. A route without a policy is denied, and the app refuses to start if one exists. A non-member gets exactly the same 404 as a missing item, so ids can't be probed.
+
+`EmbeddingProvider`, `LLMProvider` and `Reranker` sit behind interfaces (`app/rag/embeddings.py`, `app/rag/llm.py`, `app/rag/reranker.py`); the project moved from OpenAI to local embeddings + Groq without touching any other file.
 
 ## Retrieval Strategies
 
 - **Dense:** the query is embedded and compared to chunk embeddings by cosine distance. Strong on paraphrase and meaning, weaker on exact tokens such as IDs and numbers.
 - **Sparse:** PostgreSQL full-text search (`tsvector` / `ts_rank`). Strong on exact terms, but requires every query term to appear in a chunk, so paraphrased queries can return nothing.
-- **Hybrid:** both run over a candidate pool and are fused with Reciprocal Rank Fusion (`k=60`). Fusing by rank position avoids comparing cosine distances with text-search scores, which are on incomparable scales. If one method returns nothing, hybrid falls back to the other.
-- **Reranking:** a cross-encoder reads the question and each candidate chunk together and re-scores them. It is more precise than embeddings but cannot be precomputed, so it runs only over the 20-candidate pool. It can only reorder what retrieval already found.
-- **Query transformation:** a single LLM call can produce a rewritten query, expansion keywords (searched with OR semantics), paraphrases, and a hypothetical answer passage (HyDE, embedded in place of the question). The original query is always searched too, and reranking and grounding use the original question, which limits query drift.
+- **Hybrid:** both run over a candidate pool and are fused with Reciprocal Rank Fusion (`k=60`). Fusing by rank avoids comparing cosine distances with text-search scores, which are on incomparable scales.
+- **Reranking:** a cross-encoder reads the question and each candidate together. More precise than embeddings but can't be precomputed, so it runs only over the 20-candidate pool, and can only reorder what retrieval found.
+- **Query transformation:** one LLM call can produce a rewrite, expansion keywords (searched with OR), paraphrases and a hypothetical answer passage (HyDE). The original query is always searched too, and reranking and grounding use the original question.
+- **Graph:** entities named in the question are linked to the graph, relationships are walked up to N hops, and the chunks those relationships came from are fused with the hybrid results.
 
 ## Known Limitations
 
-- The sparse retriever is PostgreSQL full-text search with `ts_rank`. It is **not** BM25 (no IDF weighting or length normalization).
-- Plain sparse search requires all query terms to match, so long natural-language questions often get no sparse results. Keyword expansion uses OR matching to compensate.
-- Rerank scores are raw model outputs: a correct chunk can score negative, and scores are only meaningful relative to each other, so there is no relevance cutoff on them. RRF scores reward agreement between searches, not relevance, so they must not be used as a cutoff either.
-- The similarity threshold decides only whether to answer at all, not which chunks reach the LLM, and its default (0.8) is looser than the distance gap observed between relevant and off-topic content on the test documents.
-- Query transformation adds one LLM call per question. It fails open only when the transformation call itself fails; if the answer call fails too, the request fails. HyDE passages may contain invented facts; they only steer retrieval and never reach the final answer.
-- Reranking and query transformation were checked by hand on a small set of documents; their effect has not yet been measured (formal evaluation is Phase 13).
-- Rechunking a document in the Chunking Lab discards its page numbers (stored text is flat); re-upload to restore page attribution.
-- Uploading the same file twice creates duplicate chunks that compete for top-k slots; there is no deduplication yet.
-- The first request after a restart is slow while local models load (embedding model, then the cross-encoder).
-- Tests run against the development database.
+**Retrieval and answers**
+- The sparse retriever is PostgreSQL full-text search with `ts_rank`, **not** BM25 (no IDF weighting or length normalization). Plain sparse search requires all query terms to match.
+- Rerank and RRF scores are relative, so neither is used as a relevance cutoff. The similarity threshold only decides whether to answer at all.
+- Query transformation, conversation rewriting, the agent router and graph extraction each cost LLM calls; with Groq's free tier, calls are scarce.
+- Uploading the same file twice creates duplicate chunks; there is no deduplication. Rechunking discards page numbers (stored text is flat).
+- Images are searchable only through the text OCR finds in them; there are no image embeddings.
+- With a small golden set most experiment differences are not statistically significant, and the LLM judge is the same model family as the generator, so faithfulness/correctness scores are indicative only.
+
+**Security**
+- Prompt fencing and answer sanitizing *reduce* prompt-injection risk; no prompt format can prove a model won't follow a cleverly written document.
+- Login tokens are kept in browser localStorage, so an XSS bug in the frontend could read them (no cookies means no CSRF exposure). Tokens can't be revoked before they expire (`JWT_EXPIRE_MINUTES`, default 60) except by changing `JWT_SECRET` or deactivating the user.
+- Rate limits are counted in memory per process and reset on restart; with several API processes each has its own budget.
+- Workspaces created while auth is off, after users exist, have no owner until one is added in the database.
+- Two owners demoting each other at the same moment is not locked against (the last-owner check isn't serialized).
+- Chunked uploads (no `Content-Length`) skip the early 413, but the upload handler still enforces `MAX_UPLOAD_MB`. UTF-16 `.txt` files are rejected (the text check refuses NUL bytes).
+
+**Runtime**
+- Queued uploads are stored in the `jobs` table until processed (then cleared), so very large queues use database space.
+- A job whose worker dies stays "running" until `JOB_STALE_AFTER_SECONDS` (default 15 minutes) passes, then it is retried.
+- Metrics and the embedding cache are per process; Prometheus sums several processes, but cache hits aren't shared between them.
+- `/health/ready` checks the database and migrations, not that a worker is running; watch `kf_jobs_oldest_queued_seconds` for that.
+- Local models load lazily, so the first request after a restart is slow.
 
 ## Project Structure
 
@@ -211,29 +248,30 @@ Context Assembly → LLM (Groq) → Grounded Answer + Deduplicated Sources
 knowledgeflow-ai/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI app entrypoint
-│   │   ├── core/                 # config, logging
-│   │   ├── db/                   # SQLAlchemy models, session, declarative base
-│   │   ├── rag/                  # parsers, chunker, embeddings, llm, retriever (dense/sparse/RRF),
-│   │   │                         # reranker, query_transform, pipeline
-│   │   └── api/                  # route handlers (health, documents, query)
-│   ├── alembic/                  # DB migrations
+│   │   ├── main.py            # app, middleware, routers (all behind the access guard)
+│   │   ├── worker.py          # `python -m app.worker`
+│   │   ├── core/              # config, access policies, security, rate limits, HTTP hardening,
+│   │   │                      # logging (JSON + redaction), metrics
+│   │   ├── db/                # SQLAlchemy models, session
+│   │   ├── jobs/              # PostgreSQL job queue and worker
+│   │   ├── rag/               # parsers, multimodal, chunker, embeddings (+ cache), llm, retriever,
+│   │   │                      # reranker, query_transform, conversation, graph, evaluation,
+│   │   │                      # experiments, safety, pipeline
+│   │   ├── agent/             # LangGraph workflow, router, tools
+│   │   └── api/               # route handlers
+│   ├── alembic/               # migrations 0001–0010
 │   └── tests/
 ├── frontend/
 │   └── src/
-│       ├── app/                  # Next.js App Router pages
-│       ├── components/           # React components
-│       └── lib/                  # API clients
-└── docs/
+│       ├── app/               # Next.js App Router pages
+│       ├── components/        # AuthGate and shared components
+│       └── lib/               # API clients
+└── scripts/                   # scan_secrets.py
 ```
 
 ## Git Checkpoints
 
-Each verified phase is tagged: `phase-0-foundation`, `phase-1-basic-rag`, `phase-2-chunking`, `phase-3-metadata`, `phase-4-retrieval-lab`, `phase-5-hybrid-search`, `phase-6-reranking`, `phase-7-query-transformation`.
-
-## Roadmap
-
-This project is built in 17 sequential phases (0–16), each adding one RAG concept at a time: foundation, basic RAG, chunking, metadata, retrieval debugging, hybrid search, reranking, query transformation, conversational RAG, multi-workspace knowledge spaces, multimodal RAG, agentic RAG (LangGraph), Graph RAG, formal evaluation (Recall@K, MRR, NDCG), an experimentation lab, productionization (auth, caching, observability), and RAG security. Every phase is verified — tested manually and via `pytest` — before the next begins.
+Each verified phase is tagged: `phase-0-foundation`, `phase-2-chunking`, `phase-3-metadata`, `phase-4-retrieval-lab`, `phase-5-hybrid-search`, `phase-6-reranking`, `phase-7-query-transformation`, `phase-8-conversational-rag`, `phase-9-workspaces`, `phase-11-agentic-rag`, `phase-12-graph-rag`.
 
 ## License
 

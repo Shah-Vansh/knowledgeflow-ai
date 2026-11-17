@@ -25,6 +25,7 @@ from app.rag.llm import LLMProvider, get_llm_provider
 from app.rag.pipeline import NO_INFO_RESPONSE, retrieve_context
 from app.rag.reranker import Reranker
 from app.rag.retriever import RRF_K, reciprocal_rank_fusion_many
+from app.rag.safety import build_answer_prompt, sanitize_answer
 
 logger = logging.getLogger(__name__)
 
@@ -268,19 +269,8 @@ def answer_with_graph(
             + "\n".join(format_fact(f) for f in graph.facts)
             + "\n\n"
         )
-    passages = "\n\n---\n\n".join(chunk.content for chunk, _ in fused)
-
-    prompt = f"""You are a helpful assistant answering questions using ONLY the knowledge graph facts and text passages below.
-If they do not contain enough information to answer the question, respond exactly with:
-"{NO_INFO_RESPONSE}"
-Do not use any outside knowledge. Do not invent facts, sources, or details that are not present below.
-
-{facts_block}Text passages:
-{passages}
-
-Question: {question}
-
-Answer:"""
-
-    answer = (llm or get_llm_provider()).generate(prompt)
+    prompt = build_answer_prompt(
+        question, [chunk.content for chunk, _ in fused], NO_INFO_RESPONSE, facts_block=facts_block
+    )
+    answer = sanitize_answer((llm or get_llm_provider()).generate(prompt))
     return {"answer": answer, "sources": sources, "graph": graph_info, "mode": mode}

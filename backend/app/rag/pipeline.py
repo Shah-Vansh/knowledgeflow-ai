@@ -6,16 +6,17 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.models import Document, Chunk
-from app.rag.parsers import extract_pages
 from app.rag.chunker import chunk_text
 from app.rag.embeddings import get_embedding_provider
 from app.rag.llm import LLMProvider, get_llm_provider
+from app.rag.multimodal import IMAGE_EXTENSIONS, chunk_table, extract_elements
 from app.rag.query_transform import (
     normalize_transforms,
     plan_search_jobs,
     transform_query,
 )
 from app.rag.reranker import Reranker, get_reranker, rerank_candidates
+from app.rag.safety import build_answer_prompt, sanitize_answer
 from app.rag.retriever import (
     RRF_K,
     reciprocal_rank_fusion_many,
@@ -33,6 +34,28 @@ NO_INFO_RESPONSE = (
 )
 
 
+def source_type_for(filename: str) -> Optional[str]:
+    extension = filename.lower().rsplit(".", 1)[-1] if "." in filename else None
+    return "image" if extension in IMAGE_EXTENSIONS else extension
+
+
+def new_document(db: Session, filename: str, workspace_id: Optional[int], status: str,
+                 commit: bool = True) -> Document:
+    """Creates the document row (status "processing", or "queued" for the worker).
+    commit=False only flushes, so the caller can commit it together with its job."""
+    document = Document(filename=filename, status=status, source_type=source_type_for(filename))
+    if workspace_id is not None:
+        document.workspace_id = workspace_id
+    db.add(document)
+    if commit:
+        db.commit()
+        db.refresh(document)
+    else:
+        db.flush()
+        db.refresh(document)  # loads server defaults (workspace_id, uploaded_at)
+    return document
+
+
 def ingest_document(
     db: Session,
     file_path: str,
@@ -41,33 +64,46 @@ def ingest_document(
     chunk_size: int = 500,
     overlap: int = 0,
     workspace_id: Optional[int] = None,
+    document: Optional[Document] = None,
 ) -> Document:
     """
     workspace_id=None leaves the column to its database default (the General
     workspace). Callers that accept a workspace from a user must verify it exists.
-    """
-    source_type = filename.lower().rsplit(".", 1)[-1] if "." in filename else None
 
-    document = Document(filename=filename, status="processing", source_type=source_type)
-    if workspace_id is not None:
-        document.workspace_id = workspace_id
-    db.add(document)
-    db.commit()
-    db.refresh(document)
+    `document` lets the background worker process a record created at upload time
+    (status "queued"); any chunks left by an earlier, interrupted attempt are removed.
+
+    The file is first turned into typed elements (text, table, ocr, image_text) by
+    app/rag/multimodal.py; text-like elements are chunked with the chosen strategy,
+    tables are chunked by rows with the header repeated. Each chunk remembers its type
+    and, for OCR text, the engine's confidence.
+    """
+    if document is None:
+        document = new_document(db, filename, workspace_id, status="processing")
+    else:
+        db.query(Chunk).filter(Chunk.document_id == document.id).delete(synchronize_session=False)
+        document.status = "processing"
+        document.ingest_report = None
+        db.commit()
+    source_type = document.source_type
 
     try:
-        pages = extract_pages(file_path, filename)
+        elements, report = extract_elements(file_path, filename)
+        document.ingest_report = report.to_dict()
 
         if source_type == "pdf":
-            document.page_count = len(pages)
+            document.page_count = report.pages_total
 
-        document.raw_text = "\n\n".join(text for _, text in pages)
+        document.raw_text = "\n\n".join(element.text for element in elements)
 
-        all_pieces = []  # list of (piece_text, page_number)
-        for page_number, page_text in pages:
-            pieces = chunk_text(page_text, strategy=strategy, chunk_size=chunk_size, overlap=overlap)
-            for piece in pieces:
-                all_pieces.append((piece, page_number))
+        all_pieces = []  # (text, page_number, chunk_type, ocr_confidence)
+        for element in elements:
+            if element.kind == "table":
+                texts = chunk_table(element.text)
+            else:
+                texts = chunk_text(element.text, strategy=strategy, chunk_size=chunk_size, overlap=overlap)
+            for piece in texts:
+                all_pieces.append((piece, element.page_number, element.kind, element.confidence))
 
         if not all_pieces:
             document.status = "failed"
@@ -75,9 +111,9 @@ def ingest_document(
             return document
 
         embedder = get_embedding_provider()
-        vectors = embedder.embed_batch([piece for piece, _ in all_pieces])
+        vectors = embedder.embed_batch([piece for piece, _, _, _ in all_pieces])
 
-        for index, ((piece, page_number), vector) in enumerate(zip(all_pieces, vectors)):
+        for index, ((piece, page_number, kind, confidence), vector) in enumerate(zip(all_pieces, vectors)):
             # search_vector is NOT set here — it's a PostgreSQL generated column.
             db.add(
                 Chunk(
@@ -89,6 +125,8 @@ def ingest_document(
                     chunk_size=chunk_size,
                     overlap=overlap,
                     page_number=page_number,
+                    chunk_type=kind,
+                    ocr_confidence=confidence,
                 )
             )
 
@@ -98,6 +136,8 @@ def ingest_document(
     except Exception as exc:
         logger.error("Ingestion failed for %s: %s", filename, exc)
         document.status = "failed"
+        if document.ingest_report is None:
+            document.ingest_report = {"notes": [f"Processing failed: {type(exc).__name__}: {exc}"[:300]]}
         db.commit()
 
     return document
@@ -335,6 +375,7 @@ def answer_question(
     transforms: Optional[List[str]] = None,
     llm: Optional[LLMProvider] = None,
     workspace_id: Optional[int] = None,
+    use_rerank: Optional[bool] = None,
 ) -> dict:
     k = k or settings.TOP_K
 
@@ -351,7 +392,7 @@ def answer_question(
     retrieval = retrieve_context(
         db, question, query_vector, k=k, document_ids=document_ids,
         reranker=reranker, transforms=transforms, llm=llm, embedder=embedder,
-        workspace_id=workspace_id,
+        workspace_id=workspace_id, use_rerank=use_rerank,
     )
     hybrid = retrieval["hybrid"]
     ranked = retrieval["ranked"]
@@ -400,20 +441,7 @@ def answer_question(
 
     sources = sorted(source_map.values(), key=lambda s: s["score"], reverse=True)
 
-    context = "\n\n---\n\n".join(context_blocks)
-
-    prompt = f"""You are a helpful assistant answering questions using ONLY the context below.
-If the context does not contain enough information to answer the question, respond exactly with:
-"{NO_INFO_RESPONSE}"
-Do not use any outside knowledge. Do not invent facts, sources, or details not present in the context.
-
-Context:
-{context}
-
-Question: {question}
-
-Answer:"""
-
-    answer = (llm or get_llm_provider()).generate(prompt)
+    prompt = build_answer_prompt(question, context_blocks, NO_INFO_RESPONSE)
+    answer = sanitize_answer((llm or get_llm_provider()).generate(prompt))
 
     return {"answer": answer, "sources": sources, **meta}
