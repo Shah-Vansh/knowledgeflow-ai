@@ -2,25 +2,145 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Theme tokens. Tailwind's slate / brand / emerald / red / amber classes read these
+ * variables (tailwind.config.ts), so every page switches theme without dark: variants.
+ * `html.dark` is set before first paint by the script in layout.tsx.
+ */
 @layer base {
+  :root {
+    --kf-slate-50: 248 250 252;
+    --kf-slate-100: 241 245 249;
+    --kf-slate-200: 226 232 240;
+    --kf-slate-300: 203 213 225;
+    --kf-slate-400: 148 163 184;
+    --kf-slate-500: 100 116 139;
+    --kf-slate-600: 71 85 105;
+    --kf-slate-700: 51 65 85;
+    --kf-slate-800: 30 41 59;
+    --kf-slate-900: 15 23 42;
+    --kf-slate-950: 2 6 23;
+    --kf-brand-50: 238 242 255;
+    --kf-brand-100: 224 231 255;
+    --kf-brand-200: 199 210 254;
+    --kf-brand-300: 165 180 252;
+    --kf-brand-400: 129 140 248;
+    --kf-brand-500: 99 102 241;
+    --kf-brand-600: 79 70 229;
+    --kf-brand-700: 67 56 202;
+    --kf-brand-800: 55 48 163;
+    --kf-brand-900: 49 46 129;
+    --kf-emerald-50: 236 253 245;
+    --kf-emerald-100: 209 250 229;
+    --kf-emerald-200: 167 243 208;
+    --kf-emerald-500: 16 185 129;
+    --kf-emerald-600: 5 150 105;
+    --kf-emerald-700: 4 120 87;
+    --kf-emerald-800: 6 95 70;
+    --kf-red-50: 254 242 242;
+    --kf-red-100: 254 226 226;
+    --kf-red-200: 254 202 202;
+    --kf-red-500: 239 68 68;
+    --kf-red-600: 220 38 38;
+    --kf-red-700: 185 28 28;
+    --kf-red-800: 153 27 27;
+    --kf-amber-50: 255 251 235;
+    --kf-amber-100: 254 243 199;
+    --kf-amber-200: 253 230 138;
+    --kf-amber-500: 245 158 11;
+    --kf-amber-600: 217 119 6;
+    --kf-amber-700: 180 83 9;
+    --kf-amber-800: 146 64 14;
+    --kf-surface: 255 255 255;
+  }
+  :root.dark {
+    --kf-slate-50: 11 15 25;
+    --kf-slate-100: 30 38 55;
+    --kf-slate-200: 45 55 75;
+    --kf-slate-300: 65 78 100;
+    --kf-slate-400: 110 125 150;
+    --kf-slate-500: 140 155 178;
+    --kf-slate-600: 170 182 200;
+    --kf-slate-700: 200 210 225;
+    --kf-slate-800: 222 229 238;
+    --kf-slate-900: 238 242 247;
+    --kf-slate-950: 248 250 252;
+    --kf-brand-50: 35 33 85;
+    --kf-brand-100: 48 46 120;
+    --kf-brand-200: 72 68 170;
+    --kf-brand-300: 99 102 241;
+    --kf-brand-400: 129 140 248;
+    --kf-brand-500: 99 102 241;
+    --kf-brand-600: 79 70 229;
+    --kf-brand-700: 165 180 252;
+    --kf-brand-800: 199 210 254;
+    --kf-brand-900: 224 231 255;
+    --kf-emerald-50: 6 46 34;
+    --kf-emerald-100: 6 78 59;
+    --kf-emerald-200: 6 95 70;
+    --kf-emerald-500: 16 185 129;
+    --kf-emerald-600: 52 211 153;
+    --kf-emerald-700: 110 231 183;
+    --kf-emerald-800: 167 243 208;
+    --kf-red-50: 69 10 10;
+    --kf-red-100: 99 18 18;
+    --kf-red-200: 127 29 29;
+    --kf-red-500: 239 68 68;
+    --kf-red-600: 248 113 113;
+    --kf-red-700: 252 165 165;
+    --kf-red-800: 254 202 202;
+    --kf-amber-50: 69 26 3;
+    --kf-amber-100: 99 45 7;
+    --kf-amber-200: 120 53 15;
+    --kf-amber-500: 245 158 11;
+    --kf-amber-600: 251 191 36;
+    --kf-amber-700: 252 211 77;
+    --kf-amber-800: 253 230 138;
+    --kf-surface: 19 25 38;
+  }
+
   html {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark; /* native controls: select popups, scrollbars, date pickers */
   }
   body {
     @apply bg-slate-50 text-slate-900;
   }
   :focus-visible {
-    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white;
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-surface;
   }
   ::selection {
     @apply bg-brand-100 text-brand-900;
   }
 }
 
+/* White surfaces (cards, inputs, sidebar) become the dark surface colour. */
 @layer utilities {
+  .dark .bg-white {
+    background-color: rgb(var(--kf-surface) / 1);
+  }
+  .dark .bg-white\/90 {
+    background-color: rgb(var(--kf-surface) / 0.9);
+  }
+  .dark .hover\:bg-white:hover {
+    background-color: rgb(var(--kf-surface) / 1);
+  }
+  /* brand-600 stays a strong indigo for filled buttons; as TEXT it needs a lighter tint */
+  .dark .text-brand-600 {
+    color: rgb(var(--kf-brand-700) / 1);
+  }
+  .dark .hover\:bg-brand-700:hover {
+    background-color: rgb(67 56 202 / 1);
+  }
+  .dark .shadow-card {
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.3), 0 1px 3px 0 rgb(0 0 0 / 0.25);
+  }
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: rgb(203 213 225) transparent;
+    scrollbar-color: rgb(var(--kf-slate-300)) transparent;
   }
 }

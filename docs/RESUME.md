@@ -15,7 +15,7 @@ version that fits the space you have, then put your own name, dates and links ar
 - Added multimodal ingestion (table extraction, OCR for scanned pages and images), a verified knowledge graph whose every relation must be backed by its source passage, and a LangGraph agent that routes questions to search, graph, metadata or a sandboxed calculator.
 - Built an evaluation harness (hit@k, recall@k, precision@k, MRR, NDCG, LLM-judged faithfulness) and an experimentation lab that compares configurations with paired bootstrap confidence intervals.
 - Secured the API with Argon2id passwords, revocable JWTs, viewer/editor/owner workspace roles enforced by one deny-by-default policy table over all 49 routes, rate limiting, prompt-injection fencing and output sanitization.
-- Productionized with a PostgreSQL job queue (`FOR UPDATE SKIP LOCKED`) and retrying workers, duplicate-upload detection, an embedding cache, JSON logs with secret redaction, readiness probes and Prometheus metrics; covered by 574 automated tests (548 backend, 26 frontend), 39 mutation checks and GitHub Actions CI.
+- Productionized with a PostgreSQL job queue (`FOR UPDATE SKIP LOCKED`) and retrying workers, duplicate-upload detection, an embedding cache, JSON logs with secret redaction, readiness probes and Prometheus metrics; covered by 593 automated tests (548 backend, 31 frontend unit, 14 browser end-to-end), 39 mutation checks and GitHub Actions CI.
 
 ### Short version (3 bullets)
 
@@ -39,10 +39,10 @@ version that fits the space you have, then put your own name, dates and links ar
 | **Backend** | FastAPI, SQLAlchemy, 11 Alembic migrations, PostgreSQL row locking, background workers (`app/jobs/`) |
 | **Security** | Argon2id, JWT with explicit algorithms and versioned revocation, deny-by-default authorization, 404 masking against id probing, rate limits, upload signature checks, prompt fencing, security headers (`app/core/access.py`, `security.py`, `http.py`, `rag/safety.py`) |
 | **Reliability / ops** | Job queue with backoff and stale-job recovery, readiness vs liveness probes, Prometheus metrics, JSON logs with redaction, startup configuration check |
-| **Testing** | 548 pytest tests against a real PostgreSQL test database, 26 Vitest frontend tests, GitHub Actions CI, an access-control matrix over every route × 5 user types, 39 mutation checks proving the tests catch broken security code |
-| **Frontend** | Next.js App Router, TypeScript, Tailwind design system, app shell with client-side navigation and global workspace state, members & roles management, safe Markdown rendering of model output, background-job progress polling |
+| **Testing** | 548 pytest tests against a real PostgreSQL test database, 31 Vitest unit tests, 14 Playwright browser tests, GitHub Actions CI, an access-control matrix over every route × 5 user types, 39 mutation checks proving the tests catch broken security code |
+| **Frontend** | Next.js App Router, TypeScript, Tailwind design system, app shell with client-side navigation and global workspace state, members & roles management, dark mode with system preference and no flash, safe Markdown rendering of model output, background-job progress polling |
 
-**Keywords for ATS filters:** RAG, Retrieval-Augmented Generation, LLM, LangGraph, vector database, pgvector, embeddings, semantic search, hybrid search, reranking, cross-encoder, knowledge graph, OCR, FastAPI, Python, PostgreSQL, SQLAlchemy, Alembic, JWT, RBAC, Next.js, React, TypeScript, Tailwind CSS, pytest, Prometheus, observability.
+**Keywords for ATS filters:** Playwright, end-to-end testing, RAG, Retrieval-Augmented Generation, LLM, LangGraph, vector database, pgvector, embeddings, semantic search, hybrid search, reranking, cross-encoder, knowledge graph, OCR, FastAPI, Python, PostgreSQL, SQLAlchemy, Alembic, JWT, RBAC, Next.js, React, TypeScript, Tailwind CSS, pytest, Prometheus, observability.
 
 ---
 
@@ -53,8 +53,8 @@ version that fits the space you have, then put your own name, dates and links ar
 | Build phases | 17 (0–16), each tested before the next |
 | API routes | 49, every one covered by the access-policy table |
 | Database migrations | 11 |
-| Automated tests | 574: 548 backend (547 pass + 1 that needs a live LLM key) and 26 frontend |
-| CI | GitHub Actions: both test suites + production build on every push |
+| Automated tests | 593: 548 backend (547 pass + 1 that needs a live LLM key), 31 frontend unit, 14 Playwright browser tests (13 + 1 LLM test run on demand) |
+| CI | GitHub Actions on every push: backend tests, frontend tests + build, browser tests against the full stack |
 | Mutation checks | 39, all caught |
 | Backend / frontend code | ~7,700 lines Python, ~5,900 lines TypeScript |
 | App pages | 14, in one app shell |

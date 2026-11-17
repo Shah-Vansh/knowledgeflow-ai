@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { Alert, Button, Field, inputClass } from "@/components/ui";
+import ThemeToggle from "@/components/ThemeToggle";
 import { AuthConfig, getAuthConfig, login, register, safeNextPath } from "@/lib/auth";
 
 export default function LoginPage() {
@@ -37,7 +38,7 @@ export default function LoginPage() {
 
   return (
     <main className="flex min-h-screen bg-slate-50">
-      <section className="relative hidden w-1/2 flex-col justify-between overflow-hidden bg-gradient-to-br from-brand-700 via-brand-600 to-indigo-500 p-12 text-white lg:flex">
+      <section className="relative hidden w-1/2 flex-col justify-between overflow-hidden bg-gradient-to-br from-brand-700 via-brand-600 to-indigo-500 dark:from-indigo-950 dark:via-indigo-900 dark:to-indigo-800 p-12 text-white lg:flex">
         <div className="flex items-center gap-2.5">
           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/15 text-base font-bold ring-1 ring-white/30">K</span>
           <span className="text-lg font-semibold">KnowledgeFlow AI</span>
@@ -46,18 +47,19 @@ export default function LoginPage() {
           <h2 className="text-3xl font-semibold leading-tight tracking-tight">
             Answers from your own documents, with the sources to prove it.
           </h2>
-          <ul className="mt-8 space-y-3 text-sm text-brand-50">
+          <ul className="mt-8 space-y-3 text-sm text-white/85">
             <li>• Hybrid search, reranking and a knowledge graph</li>
             <li>• PDFs, scans, tables and images</li>
             <li>• Private workspaces with roles</li>
           </ul>
         </div>
-        <p className="text-xs text-brand-100">Enterprise knowledge &amp; research copilot</p>
+        <p className="text-xs text-white/70">Enterprise knowledge &amp; research copilot</p>
         <div className="pointer-events-none absolute -right-24 -top-24 h-80 w-80 rounded-full bg-white/10 blur-2xl" />
         <div className="pointer-events-none absolute -bottom-32 -left-16 h-96 w-96 rounded-full bg-indigo-300/20 blur-3xl" />
       </section>
 
-      <section className="flex w-full items-center justify-center px-4 py-12 lg:w-1/2">
+      <section className="relative flex w-full items-center justify-center px-4 py-12 lg:w-1/2">
+        <ThemeToggle className="absolute right-4 top-4" />
         <div className="w-full max-w-sm">
           <div className="mb-8 flex items-center gap-2.5 lg:hidden">
             <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-600 text-base font-bold text-white">K</span>

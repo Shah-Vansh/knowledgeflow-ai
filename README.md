@@ -18,6 +18,9 @@ Documents (PDF, TXT, scanned pages, images) are ingested into workspaces, chunke
 | **Upload with background processing** | **Document inspector** |
 | ![Upload](docs/screenshots/upload.png) | ![Inspector](docs/screenshots/inspector.png) |
 
+| **Dark mode** | **Dark mode — documents** |
+| ![Dashboard, dark](docs/screenshots/dashboard-dark.png) | ![Documents, dark](docs/screenshots/documents-dark.png) |
+
 <p align="center"><img src="docs/screenshots/login.png" alt="Sign in" width="49%"> <img src="docs/screenshots/mobile-chat.png" alt="Mobile" width="20%"></p>
 
 ## Tech Stack
@@ -155,13 +158,16 @@ venv\Scriptsctivate
 pytest                      # 548 backend tests
 
 cd frontend
-npm test                    # 26 frontend unit tests (Vitest)
+npm test                    # 31 frontend unit tests (Vitest)
 npm run typecheck
+npm run e2e                 # 14 browser tests (Playwright) against a running stack
 ```
 
 Backend tests run against `<your database>_test` (created and migrated automatically; `KF_TEST_DB_RECREATE=1` rebuilds it) and refuse to run against a database whose name doesn't end in `_test`. All LLM-dependent tests use fake LLMs except one (`test_rag_pipeline_api.py`), which calls Groq only when `GROQ_API_KEY` is exported in the shell and skips otherwise. Embeddings and the reranker are the real local models.
 
-**CI:** every push to `main` runs both suites on GitHub Actions (`.github/workflows/ci.yml`) against a PostgreSQL + pgvector service container, plus the production frontend build.
+The browser tests (`frontend/e2e/`, see its README) sign in, upload, refuse a duplicate, delete, inspect, retrieve, create and switch workspaces, manage members, visit every page through the sidebar without a reload, check for console errors and exercise the theme switch. Each test registers its own user and workspace. The chat test calls the LLM and runs only with `E2E_LLM=1`.
+
+**CI:** every push to `main` runs three jobs on GitHub Actions (`.github/workflows/ci.yml`): the backend suite against a PostgreSQL + pgvector service container; the frontend unit tests, type check and production build; and the browser tests against the full stack (API with sign-in on, queued uploads and an embedded worker, plus the production frontend).
 
 `python scripts/scan_secrets.py --history` checks tracked files and the whole git history for committed keys and passwords (it prints only file, line and kind, never the value).
 
@@ -187,10 +193,11 @@ Backend tests run against `<your database>_test` (created and migrated automatic
 | 15 | Security — accounts, viewer/editor/owner roles per workspace, one deny-by-default policy table, rate limits, upload content checks, prompt fencing and answer sanitizing, security headers | ✅ |
 | 16 | Production runtime — PostgreSQL job queue (`SKIP LOCKED`) with retrying workers, query-embedding cache, JSON logs with redaction, readiness checks, Prometheus metrics | ✅ |
 | v1.0 | Product polish — app shell with sidebar navigation and global workspace switcher, design system, dashboard, members & roles screen, safe Markdown answers, duplicate-upload detection, "sign out everywhere", locked last-owner check, CI | ✅ |
+| v1.2 | Dark mode (light / dark / follow system, no flash on load), first-workspace onboarding, Playwright browser tests in CI | ✅ |
 
 ## Application
 
-One app shell: a sidebar with every page, the **active workspace** switcher (every page works inside it), backend status and the signed-in user. Moving between pages is client-side, so nothing reloads.
+One app shell: a sidebar with every page, the **active workspace** switcher (every page works inside it), backend status, the theme switch (Light / Dark / System) and the signed-in user. Moving between pages is client-side, so nothing reloads.
 
 | Section | Page | What it does |
 |---|---|---|

@@ -6,6 +6,9 @@ import { addMember, listMembers, Member, removeMember, Role, ROLES } from "@/lib
 import { useWorkspace } from "@/lib/workspace-context";
 import { Alert, Badge, Button, Card, Field, inputClass, Loading } from "@/components/ui";
 
+/** "a viewer", "an editor", "an owner" */
+export const withArticle = (role: Role) => `${/^[aeiou]/.test(role) ? "an" : "a"} ${role}`;
+
 const ROLE_HELP: Record<Role, string> = {
   viewer: "Ask questions, read documents",
   editor: "Also upload, delete and run evaluations",
@@ -75,7 +78,7 @@ export default function MembersPanel() {
     run(async () => {
       await addMember(workspaceId, target, role);
       setEmail("");
-    }, `${target} is now a${role === "owner" ? "n" : ""} ${role}.`);
+    }, `${target} is now ${withArticle(role)}.`);
   };
 
   return (
@@ -108,7 +111,7 @@ export default function MembersPanel() {
                       disabled={busy}
                       onChange={(e) => {
                         const next = e.target.value as Role;
-                        run(() => addMember(workspaceId, m.email, next), `${m.email} is now a${next === "owner" ? "n" : ""} ${next}.`);
+                        run(() => addMember(workspaceId, m.email, next), `${m.email} is now ${withArticle(next)}.`);
                       }}
                       className={`${inputClass} w-28 !py-1.5`}
                     >

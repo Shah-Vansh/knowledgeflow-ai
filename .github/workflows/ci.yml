@@ -77,3 +77,84 @@ jobs:
       - run: npm run build
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8000
+
+  e2e:
+    name: Browser tests (Playwright, full stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_pass
+          POSTGRES_DB: knowledgeflow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg2://postgres:ci_pass@localhost:5432/knowledgeflow
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      E2E_API: http://localhost:8000
+      E2E_WEB: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: System libraries for OpenCV / OCR
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+      - name: Backend dependencies (CPU-only PyTorch)
+        working-directory: backend
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+      - name: Cache local models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('backend/app/core/config.py') }}
+      - name: Start the API (sign-in on, queued uploads, embedded worker)
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          export JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          AUTH_REQUIRED=true INGEST_ASYNC=true RUN_EMBEDDED_WORKER=true WORKER_POLL_SECONDS=1 \
+            RATE_LIMIT_AUTH_PER_MINUTE=1000 \
+            CORS_ORIGINS=http://localhost:3000 nohup uvicorn app.main:app --port 8000 > ../api.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:8000/health/ready && break; sleep 2; done
+      - name: Build and start the frontend
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+        run: |
+          npm ci
+          npm run build
+          nohup npm start -- -p 3000 > ../web.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:3000/login && break; sleep 2; done
+      - name: Install the browser
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run browser tests
+        working-directory: frontend
+        run: npm run e2e
+      - name: Upload report and server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+            api.log
+            web.log

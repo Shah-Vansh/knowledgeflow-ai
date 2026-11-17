@@ -79,14 +79,14 @@ function GraphDrawing({ graph, highlight }: { graph: GraphView; highlight: Set<s
         const to = positions.get(edge.target)!;
         return (
           <g key={edge.id}>
-            <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="#cbd5e1" strokeWidth={1.5} />
+            <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} className="stroke-slate-300" strokeWidth={1.5} />
             {labelEdges && (
               <text
                 x={(from.x + to.x) / 2}
                 y={(from.y + to.y) / 2}
                 fontSize={9}
                 textAnchor="middle"
-                fill="#64748b"
+                className="fill-slate-500"
               >
                 {edge.relation}
               </text>
@@ -106,7 +106,7 @@ function GraphDrawing({ graph, highlight }: { graph: GraphView; highlight: Set<s
               cy={position.y}
               r={radius}
               fill={TYPE_COLORS[node.type] ?? TYPE_COLORS.OTHER}
-              stroke={highlighted ? "#111827" : "#ffffff"}
+              className={highlighted ? "stroke-slate-900" : "stroke-surface"}
               strokeWidth={highlighted ? 3 : 1.5}
             />
             <text
@@ -114,7 +114,7 @@ function GraphDrawing({ graph, highlight }: { graph: GraphView; highlight: Set<s
               y={position.y + radius + 11}
               fontSize={10}
               textAnchor="middle"
-              fill="#111827"
+              className="fill-slate-900"
             >
               {node.name.length > 22 ? `${node.name.slice(0, 21)}…` : node.name}
             </text>

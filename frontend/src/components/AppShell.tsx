@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { getHealth } from "@/lib/api";
 import { logout, logoutEverywhere } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace-context";
-import { Alert, Loading, cx } from "@/components/ui";
+import { Alert, Button, Card, Field, inputClass, Loading, cx } from "@/components/ui";
+import { createWorkspace } from "@/lib/workspaces";
+import ThemeToggle from "@/components/ThemeToggle";
 import {
   AgentIcon,
   BeakerIcon,
@@ -70,7 +72,7 @@ function isActive(pathname: string, href: string) {
 function Logo() {
   return (
     <Link href="/" className="flex items-center gap-2.5">
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-sm font-bold text-white shadow-sm">
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 dark:to-indigo-700 text-sm font-bold text-white shadow-sm">
         K
       </span>
       <span className="leading-tight">
@@ -176,7 +178,10 @@ function Sidebar({ email, onNavigate }: { email: string | null; onNavigate?: () 
         ))}
       </nav>
       <div className="space-y-3 border-t border-slate-200 px-5 py-4">
-        <HealthDot />
+        <div className="flex items-center justify-between gap-2">
+          <HealthDot />
+          <ThemeToggle />
+        </div>
         {email ? (
           <div className="flex items-center justify-between gap-2">
             <span className="flex min-w-0 items-center gap-2">
@@ -214,10 +219,60 @@ function Sidebar({ email, onNavigate }: { email: string | null; onNavigate?: () 
   );
 }
 
+/** Shown to a signed-in user who isn't a member of any workspace yet. */
+function FirstWorkspace() {
+  const { refresh, setWorkspaceId } = useWorkspace();
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const created = await createWorkspace(name.trim());
+      await refresh();
+      setWorkspaceId(created.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create the workspace");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-lg py-10">
+      <Card title="Welcome to KnowledgeFlow" description="You're not a member of any workspace yet.">
+        <p className="mb-4 text-sm text-slate-600">
+          Create your own workspace to start uploading documents, or ask a workspace owner to add you by the
+          email you signed in with.
+        </p>
+        <form onSubmit={onSubmit} className="space-y-4">
+          <Field label="Workspace name">
+            <input
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Engineering"
+              className={inputClass}
+            />
+          </Field>
+          {error && <Alert tone="error">{error}</Alert>}
+          <Button type="submit" loading={busy} disabled={!name.trim()}>
+            Create workspace
+          </Button>
+        </form>
+      </Card>
+    </div>
+  );
+}
+
 export default function AppShell({ email, children }: { email: string | null; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
-  const { loading, error } = useWorkspace();
+  const { loading, error, workspaces } = useWorkspace();
+  const noWorkspace = !loading && !error && !!email && workspaces.length === 0;
 
   useEffect(() => setOpen(false), [pathname]);
 
@@ -241,7 +296,7 @@ export default function AppShell({ email, children }: { email: string | null; ch
       </div>
       {open && (
         <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true">
-          <div className="absolute inset-0 bg-slate-900/40" onClick={() => setOpen(false)} />
+          <div className="absolute inset-0 bg-slate-900/40 dark:bg-black/60" onClick={() => setOpen(false)} />
           <aside className="absolute inset-y-0 left-0 w-72 max-w-[85%] bg-white shadow-xl">
             <button
               onClick={() => setOpen(false)}
@@ -262,7 +317,7 @@ export default function AppShell({ email, children }: { email: string | null; ch
               {error}. Check that the API is running and NEXT_PUBLIC_API_URL points at it.
             </Alert>
           )}
-          {loading ? <Loading label="Loading workspace…" /> : children}
+          {loading ? <Loading label="Loading workspace…" /> : noWorkspace ? <FirstWorkspace /> : children}
         </div>
       </main>
     </div>
