@@ -83,7 +83,7 @@ Apply database migrations and start the API:
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
-The API runs at http://localhost:8000 (use `--port 8001` if another app already uses 8000, and point `NEXT_PUBLIC_API_URL` at it). Local models download once and load lazily, so the first request after a restart is slow.
+The API runs at http://localhost:8000 and the frontend at http://localhost:3000. Local models download once and load lazily, so the first request after a restart is slow.
 
 ### 3. Frontend
 
