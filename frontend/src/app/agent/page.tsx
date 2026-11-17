@@ -1,5 +1,6 @@
 "use client";
 
+import Markdown from "@/components/Markdown";
 import { useEffect, useState } from "react";
 import { useWorkspace } from "@/lib/workspace-context";
 import { AgentResponse, askAgent } from "@/lib/agent";
@@ -135,7 +136,7 @@ export default function AgentPage() {
                 </Alert>
               )}
 
-              <p className="whitespace-pre-wrap text-sm leading-6 text-slate-900">{result.answer}</p>
+              <Markdown text={result.answer} className="text-sm leading-6 text-slate-900" />
 
               {result.sources.length > 0 && (
                 <div className="border-t border-slate-100 pt-3">

@@ -1,5 +1,6 @@
 "use client";
 
+import Markdown from "@/components/Markdown";
 import { useEffect, useMemo, useState } from "react";
 import { useWorkspace } from "@/lib/workspace-context";
 import { DocumentSummary, listDocuments } from "@/lib/documents";
@@ -265,7 +266,7 @@ export default function GraphPage() {
 
             {answer && (
               <div className="space-y-3 border-t border-slate-100 pt-4">
-                <p className="whitespace-pre-wrap text-sm leading-6 text-slate-900">{answer.answer}</p>
+                <Markdown text={answer.answer} className="text-sm leading-6 text-slate-900" />
                 <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
                   <Badge>mode: {answer.mode}</Badge>
                   {answer.graph.matched_entities.length > 0 ? (

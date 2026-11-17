@@ -1,5 +1,6 @@
 "use client";
 
+import Markdown from "@/components/Markdown";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { askQuestion, QueryResponse } from "@/lib/query";
@@ -117,7 +118,7 @@ export default function QueryPage() {
 
       {result && (
         <Card title="Answer">
-          <p className="whitespace-pre-wrap text-sm leading-6 text-slate-900">{result.answer}</p>
+          <Markdown text={result.answer} className="text-sm leading-6 text-slate-900" />
         </Card>
       )}
 

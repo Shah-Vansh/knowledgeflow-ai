@@ -1,5 +1,6 @@
 "use client";
 
+import Markdown from "@/components/Markdown";
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/lib/workspace-context";
 import {
@@ -208,7 +209,7 @@ export default function ChatPage() {
               ) : (
                 <div key={m.id} className="flex justify-start">
                   <div className="max-w-[85%] space-y-3 rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-900 shadow-sm">
-                    <p className="whitespace-pre-wrap">{m.content}</p>
+                    <Markdown text={m.content} />
 
                     {m.standalone_question && (
                       <p className="text-xs italic text-slate-400">Searched as: {m.standalone_question}</p>

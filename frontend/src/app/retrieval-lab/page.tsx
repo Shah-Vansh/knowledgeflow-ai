@@ -1,5 +1,6 @@
 "use client";
 
+import Markdown from "@/components/Markdown";
 import { useEffect, useState } from "react";
 import {
   retrieveDebug,
@@ -377,7 +378,7 @@ export default function RetrievalLabPage() {
               title="Full answer"
               description="From /query, same transformations; reranked if enabled on the server."
             >
-              <p className="whitespace-pre-wrap text-sm leading-6 text-slate-800">{answer.answer}</p>
+              <Markdown text={answer.answer} className="text-sm leading-6 text-slate-800" />
               {answer.transformation_fallback && (
                 <Alert tone="warning" className="mt-3">
                   Transformation fell back to the original query for this answer.

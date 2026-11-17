@@ -16,6 +16,7 @@ import {
   inputClass,
 } from "@/components/ui";
 import { LayersIcon } from "@/components/icons";
+import MembersPanel from "@/components/MembersPanel";
 
 export default function WorkspacesPage() {
   const { workspaces, workspaceId, setWorkspaceId, refresh, loading, error: loadError } = useWorkspace();
@@ -150,6 +151,9 @@ export default function WorkspacesPage() {
               </ul>
             </Card>
           )}
+          <div className="mt-6">
+            <MembersPanel />
+          </div>
         </div>
       </div>
     </div>

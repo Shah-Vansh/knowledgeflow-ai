@@ -1,10 +1,24 @@
 # KnowledgeFlow AI
 
+[![CI](https://github.com/Shah-Vansh/knowledgeflow-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Shah-Vansh/knowledgeflow-ai/actions/workflows/ci.yml)
+
 Enterprise Knowledge & Research Copilot — an AI knowledge platform built phase by phase to learn Retrieval-Augmented Generation (RAG) from the basics up to a production-shaped system.
 
 ## Current Status: v1.0 — Phases 0–16 complete ✅
 
 Documents (PDF, TXT, scanned pages, images) are ingested into workspaces, chunked, embedded locally and stored in PostgreSQL with pgvector and PostgreSQL full-text search. Questions are answered from those documents only, through hybrid retrieval, a local cross-encoder reranker, optional query transformation, conversation memory, a knowledge graph and a small LangGraph agent. Retrieval quality is measured with a golden-set evaluation and compared across configurations in an experimentation lab. The API has user accounts, per-workspace roles, token revocation, rate limits and prompt-injection hardening, rejects duplicate uploads, and can run uploads through a PostgreSQL job queue with a separate worker, structured logs, readiness checks and Prometheus metrics. The web app is a single-page workspace with a sidebar, a global workspace switcher and a consistent design system.
+
+## Screenshots
+
+| Dashboard | Chat with cited sources |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Chat](docs/screenshots/chat.png) |
+| **Retrieval lab** | **Workspace members & roles** |
+| ![Retrieval lab](docs/screenshots/retrieval-lab.png) | ![Members](docs/screenshots/workspaces-members.png) |
+| **Upload with background processing** | **Document inspector** |
+| ![Upload](docs/screenshots/upload.png) | ![Inspector](docs/screenshots/inspector.png) |
+
+<p align="center"><img src="docs/screenshots/login.png" alt="Sign in" width="49%"> <img src="docs/screenshots/mobile-chat.png" alt="Mobile" width="20%"></p>
 
 ## Tech Stack
 
@@ -133,15 +147,21 @@ backendenv\Scripts\python scriptsind_duplicates.py --apply   # remove the extr
 - **Health:** `GET /health/live` (process answers, never touches the database), `GET /health/ready` (database reachable and schema at the migration head; 503 otherwise), `GET /health` (original check).
 - **Metrics:** `GET /metrics` in Prometheus text format: request counts and latency histograms by route template, job outcomes and durations, queue depth by status, oldest queued job age, and query-embedding cache hits/misses/size. Set `METRICS_TOKEN` (24+ characters) and scrape with `Authorization: Bearer <token>`; with auth on and no token, `/metrics` is disabled.
 
-## Run Backend Tests
+## Tests
 
 ```
 cd backend
-venv\Scripts\activate
-pytest
+venv\Scriptsctivate
+pytest                      # 548 backend tests
+
+cd frontend
+npm test                    # 26 frontend unit tests (Vitest)
+npm run typecheck
 ```
 
-Tests run against `<your database>_test` (created and migrated automatically; `KF_TEST_DB_RECREATE=1` rebuilds it) and refuse to run against a database whose name doesn't end in `_test`. All LLM-dependent tests use fake LLMs except one (`test_rag_pipeline_api.py`), which calls Groq only when `GROQ_API_KEY` is exported in the shell and skips otherwise. Embeddings and the reranker are the real local models.
+Backend tests run against `<your database>_test` (created and migrated automatically; `KF_TEST_DB_RECREATE=1` rebuilds it) and refuse to run against a database whose name doesn't end in `_test`. All LLM-dependent tests use fake LLMs except one (`test_rag_pipeline_api.py`), which calls Groq only when `GROQ_API_KEY` is exported in the shell and skips otherwise. Embeddings and the reranker are the real local models.
+
+**CI:** every push to `main` runs both suites on GitHub Actions (`.github/workflows/ci.yml`) against a PostgreSQL + pgvector service container, plus the production frontend build.
 
 `python scripts/scan_secrets.py --history` checks tracked files and the whole git history for committed keys and passwords (it prints only file, line and kind, never the value).
 
@@ -166,7 +186,7 @@ Tests run against `<your database>_test` (created and migrated automatically; `K
 | 14 | Experimentation Lab — compare retrieval and chunking variants on one eval set with paired bootstrap confidence | ✅ |
 | 15 | Security — accounts, viewer/editor/owner roles per workspace, one deny-by-default policy table, rate limits, upload content checks, prompt fencing and answer sanitizing, security headers | ✅ |
 | 16 | Production runtime — PostgreSQL job queue (`SKIP LOCKED`) with retrying workers, query-embedding cache, JSON logs with redaction, readiness checks, Prometheus metrics | ✅ |
-| v1.0 | Product polish — app shell with sidebar navigation and global workspace switcher, design system, dashboard, duplicate-upload detection, "sign out everywhere", locked last-owner check | ✅ |
+| v1.0 | Product polish — app shell with sidebar navigation and global workspace switcher, design system, dashboard, members & roles screen, safe Markdown answers, duplicate-upload detection, "sign out everywhere", locked last-owner check, CI | ✅ |
 
 ## Application
 
@@ -182,7 +202,7 @@ One app shell: a sidebar with every page, the **active workspace** switcher (eve
 | Library | `/upload` | Drag-and-drop upload with background progress |
 | | `/documents` | Documents in the workspace, delete |
 | | `/inspector` | How each file was read: text, tables, OCR pages, text in images |
-| | `/workspaces` | Create, switch and delete workspaces |
+| | `/workspaces` | Create, switch and delete workspaces; manage members and roles |
 | Labs | `/chunking-lab` | Compare two chunking setups on one document |
 | | `/retrieval-lab` | Dense vs full-text vs hybrid, reranker, query transformations |
 | | `/eval` Evaluation | Golden sets, runs, per-question results |
