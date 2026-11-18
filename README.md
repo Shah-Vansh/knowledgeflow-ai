@@ -4,7 +4,7 @@
 
 Enterprise Knowledge & Research Copilot — an AI knowledge platform built phase by phase to learn Retrieval-Augmented Generation (RAG) from the basics up to a production-shaped system.
 
-## Current Status: v1.0 — Phases 0–16 complete ✅
+## Current Status: all 17 phases (0–16) complete ✅
 
 Documents (PDF, TXT, scanned pages, images) are ingested into workspaces, chunked, embedded locally and stored in PostgreSQL with pgvector and PostgreSQL full-text search. Questions are answered from those documents only, through hybrid retrieval, a local cross-encoder reranker, optional query transformation, conversation memory, a knowledge graph and a small LangGraph agent. Retrieval quality is measured with a golden-set evaluation and compared across configurations in an experimentation lab. The API has user accounts, per-workspace roles, token revocation, rate limits and prompt-injection hardening, rejects duplicate uploads, and can run uploads through a PostgreSQL job queue with a separate worker, structured logs, readiness checks and Prometheus metrics. The web app is a single-page workspace with a sidebar, a global workspace switcher and a consistent design system.
 
@@ -177,8 +177,17 @@ The browser tests (`frontend/e2e/`, see its README) sign in, upload, refuse a du
 | 14 | Experimentation Lab — compare retrieval and chunking variants on one eval set with paired bootstrap confidence | ✅ |
 | 15 | Security — accounts, viewer/editor/owner roles per workspace, one deny-by-default policy table, rate limits, upload content checks, prompt fencing and answer sanitizing, security headers | ✅ |
 | 16 | Production runtime — PostgreSQL job queue (`SKIP LOCKED`) with retrying workers, query-embedding cache, JSON logs with redaction, readiness checks, Prometheus metrics | ✅ |
-| v1.0 | Product polish — app shell with sidebar navigation and global workspace switcher, design system, dashboard, members & roles screen, safe Markdown answers, duplicate-upload detection, "sign out everywhere", locked last-owner check, CI | ✅ |
-| v1.2 | Dark mode (light / dark / follow system, no flash on load), first-workspace onboarding, Playwright browser tests in CI | ✅ |
+
+## After the roadmap
+
+Work done once all 17 phases were complete:
+
+- **UI redesign** — one app shell with sidebar navigation (no page reloads), a global workspace switcher, a design system, a dashboard and a redesigned sign-in page
+- **Workspace members** — add teammates by email, change their role (viewer, editor, owner) or remove them
+- **Safer uploads and sessions** — duplicate uploads are rejected, "Sign out everywhere" revokes all of a user's tokens, and the last-owner check is locked against races
+- **Readable answers** — Markdown in answers (bold, lists, code) is rendered safely, never as raw HTML
+- **Dark mode** — Light / Dark / System, applied before the page paints so there is no flash
+- **Testing and CI** — frontend unit tests (Vitest), browser tests (Playwright) and GitHub Actions running every suite on each push
 
 ## Application
 
@@ -298,7 +307,7 @@ knowledgeflow-ai/
 
 ## Git Checkpoints
 
-Each verified phase is tagged: `phase-0-foundation`, `phase-2-chunking`, `phase-3-metadata`, `phase-4-retrieval-lab`, `phase-5-hybrid-search`, `phase-6-reranking`, `phase-7-query-transformation`, `phase-8-conversational-rag`, `phase-9-workspaces`, `phase-11-agentic-rag`, `phase-12-graph-rag`, `phase-15-security`, `phase-16-production`, `v1.0.0`. Phases 1, 10, 13 and 14 were committed together with neighbouring phases and have no tag of their own.
+Each verified phase is tagged: `phase-0-foundation`, `phase-2-chunking`, `phase-3-metadata`, `phase-4-retrieval-lab`, `phase-5-hybrid-search`, `phase-6-reranking`, `phase-7-query-transformation`, `phase-8-conversational-rag`, `phase-9-workspaces`, `phase-11-agentic-rag`, `phase-12-graph-rag`, `phase-15-security`, `phase-16-production`. Phases 1, 10, 13 and 14 were committed together with neighbouring phases and have no tag of their own.
 
 ## License
 
