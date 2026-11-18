@@ -8,21 +8,6 @@ Enterprise Knowledge & Research Copilot — an AI knowledge platform built phase
 
 Documents (PDF, TXT, scanned pages, images) are ingested into workspaces, chunked, embedded locally and stored in PostgreSQL with pgvector and PostgreSQL full-text search. Questions are answered from those documents only, through hybrid retrieval, a local cross-encoder reranker, optional query transformation, conversation memory, a knowledge graph and a small LangGraph agent. Retrieval quality is measured with a golden-set evaluation and compared across configurations in an experimentation lab. The API has user accounts, per-workspace roles, token revocation, rate limits and prompt-injection hardening, rejects duplicate uploads, and can run uploads through a PostgreSQL job queue with a separate worker, structured logs, readiness checks and Prometheus metrics. The web app is a single-page workspace with a sidebar, a global workspace switcher and a consistent design system.
 
-## Screenshots
-
-| Dashboard | Chat with cited sources |
-|---|---|
-| ![Dashboard](docs/screenshots/dashboard.png) | ![Chat](docs/screenshots/chat.png) |
-| **Retrieval lab** | **Workspace members & roles** |
-| ![Retrieval lab](docs/screenshots/retrieval-lab.png) | ![Members](docs/screenshots/workspaces-members.png) |
-| **Upload with background processing** | **Document inspector** |
-| ![Upload](docs/screenshots/upload.png) | ![Inspector](docs/screenshots/inspector.png) |
-
-| **Dark mode** | **Dark mode — documents** |
-| ![Dashboard, dark](docs/screenshots/dashboard-dark.png) | ![Documents, dark](docs/screenshots/documents-dark.png) |
-
-<p align="center"><img src="docs/screenshots/login.png" alt="Sign in" width="49%"> <img src="docs/screenshots/mobile-chat.png" alt="Mobile" width="20%"></p>
-
 ## Tech Stack
 
 - **Frontend:** Next.js, React, TypeScript, Tailwind CSS
