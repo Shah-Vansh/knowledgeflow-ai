@@ -44,23 +44,33 @@ Documents (PDF, TXT, scanned pages, images) are ingested into workspaces, chunke
 ```
   The test suite creates and migrates its own `knowledgeflow_test` database automatically; the database user needs permission to create databases (or create it yourself and enable `vector` in it).
 
-### 2. Backend
+### 2. Settings (one `.env` for the whole project)
+
+All settings live in a single `.env` file at the repository root, shared by the backend and the frontend. From the repository root:
 
 ```
-cd backend
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Fill in `backend/.env`. `.env.example` lists every setting with comments; the important ones:
+`.env.example` lists every setting with comments; the important ones:
 
 ```
 DATABASE_URL=postgresql+psycopg2://postgres:YOUR_PASSWORD@localhost:5432/knowledgeflow
 ENVIRONMENT=development
 CORS_ORIGINS=http://localhost:3000
 GROQ_API_KEY=                # your Groq key; never commit .env
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+The backend reads every key. The frontend reads only the `NEXT_PUBLIC_*` keys (they are built into the browser bundle, so never put a secret in one), so backend secrets in the same file never reach the browser. A variable set in the real environment overrides the file.
+
+### 3. Backend
+
+```
+cd backend
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
 Apply database migrations and start the API:
@@ -70,17 +80,16 @@ uvicorn app.main:app --reload
 ```
 The API runs at http://localhost:8000 and the frontend at http://localhost:3000. Local models download once and load lazily, so the first request after a restart is slow.
 
-### 3. Frontend
+### 4. Frontend
 
 ```
 cd frontend
 npm install
-copy .env.example .env      # NEXT_PUBLIC_API_URL=http://localhost:8000
 npm run dev
 ```
-The frontend runs at http://localhost:3000.
+The frontend runs at http://localhost:3000. It takes `NEXT_PUBLIC_API_URL` from the root `.env`; restart `npm run dev` after changing it.
 
-### 4. Verify
+### 5. Verify
 
 ```
 curl http://localhost:8000/health/ready
@@ -89,7 +98,7 @@ Expected: `{"status": "ready", "checks": {"database": true, "migrations": true}}
 
 ## Turning on authentication
 
-Auth is **off** by default so a single-user local install keeps working. To turn it on, add to `backend/.env`:
+Auth is **off** by default so a single-user local install keeps working. To turn it on, set in the root `.env`:
 
 ```
 AUTH_REQUIRED=true

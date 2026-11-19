@@ -23,7 +23,7 @@ sys.path.insert(0, str(BACKEND))
 
 import os  # noqa: E402
 
-os.chdir(BACKEND)  # so backend/.env is found
+os.chdir(BACKEND)  # run from backend/, like the API (settings read the root .env by absolute path)
 
 from app.db.models import Chunk, Document  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402

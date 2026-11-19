@@ -4,7 +4,7 @@ Test bootstrap: every test runs against a SEPARATE database, never the dev one.
 This module runs before any `app` import (pytest loads conftest.py first), so the
 environment set here is what app.core.config.Settings reads.
 
-  * DATABASE_URL comes from the environment or backend/.env; the test database is
+  * DATABASE_URL comes from the environment or the root .env; the test database is
     TEST_DATABASE_URL if set, otherwise the same server with "<name>_test".
   * The database is created if missing and migrated with `alembic upgrade head`.
   * Tests refuse to run unless the database name ends in "_test"
@@ -19,6 +19,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+ENV_FILE = BACKEND_DIR.parent / ".env"  # the single shared .env at the repository root
 
 
 def _truthy(value) -> bool:
@@ -29,9 +30,9 @@ def _resolve_test_database_url() -> str:
     explicit = os.environ.get("TEST_DATABASE_URL")
     if explicit:
         return explicit
-    base = os.environ.get("DATABASE_URL") or dotenv_values(BACKEND_DIR / ".env").get("DATABASE_URL")
+    base = os.environ.get("DATABASE_URL") or dotenv_values(ENV_FILE).get("DATABASE_URL")
     if not base:
-        raise RuntimeError("DATABASE_URL is not set (environment or backend/.env); cannot derive the test database")
+        raise RuntimeError("DATABASE_URL is not set (environment or the root .env); cannot derive the test database")
     url = make_url(base)
     name = url.database or ""
     if not name.endswith("_test"):
@@ -76,6 +77,10 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 # secret, and cheap Argon2 parameters so hashing doesn't dominate the run.
 os.environ["AUTH_REQUIRED"] = "false"
 os.environ["ENVIRONMENT"] = "test"
+# Tests expect synchronous uploads and no background worker thread, whatever the local
+# .env says; tests that need the queue switch it on themselves with monkeypatch.
+os.environ["INGEST_ASYNC"] = "false"
+os.environ["RUN_EMBEDDED_WORKER"] = "false"
 os.environ.setdefault("JWT_SECRET", "test-only-jwt-secret-0123456789abcdefghijklmnopqrstuvwxyz")
 os.environ["PASSWORD_HASH_TIME_COST"] = "1"
 os.environ["PASSWORD_HASH_MEMORY_KIB"] = "1024"

@@ -54,9 +54,10 @@ def main() -> int:
         except OSError:
             continue
 
-    env_in_history = git("log", "--all", "--oneline", "--", "backend/.env", "frontend/.env.local").strip()
+    env_in_history = git("log", "--all", "--oneline", "--", ".env", "backend/.env",
+                         "frontend/.env", "frontend/.env.local").strip()
     if env_in_history:
-        print("backend/.env or frontend/.env.local appears in git history:")
+        print("A .env file appears in git history:")
         print(env_in_history)
         found += 1
 

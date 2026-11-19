@@ -1,4 +1,12 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The project keeps ONE .env file, at the repository root, shared by the backend and
+# the frontend. It is found by absolute path, so the API, worker, alembic, tests and
+# scripts read the same file whatever directory they are started from.
+ROOT_DIR = Path(__file__).resolve().parents[3]
+ENV_FILE = ROOT_DIR / ".env"
 
 
 class Settings(BaseSettings):
@@ -66,7 +74,8 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = "text"             # "text" | "json"
     METRICS_TOKEN: str = ""              # Bearer token for /metrics; empty = open only when auth is off
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # extra="ignore": the shared file also holds frontend keys (NEXT_PUBLIC_*).
+    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
     @property
     def cors_origins_list(self) -> list[str]:
